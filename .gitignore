@@ -1,0 +1,32 @@
+# Bytecode
+**/__pycache__/*
+*.pyc
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+*/.venv
+*/venv
+*/ENV
+*/env
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploads
+uploads/
+brand_guidelines/
+pdf_exports/
+
+# Secrets
+.env
+service_account.json
+
+# OS generated files
+.DS_Store
+Thumbs.db
