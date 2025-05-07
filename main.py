@@ -7,7 +7,7 @@ from io import BytesIO
 from typing import List, Optional, Union, Dict
 import asyncio
 
-import openai
+from openai import OpenAI, RateLimitError, APIError
 import requests
 from fastapi import FastAPI, File, Form, UploadFile, Request, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -68,8 +68,8 @@ MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 BRAND_GUIDELINES_DIR = os.getenv("BRAND_GUIDELINES_DIR", "brand_guidelines")
 PDF_EXPORTS_DIR = os.getenv("PDF_EXPORTS_DIR", "pdf_exports")
 
-# Initialize OpenAI
-openai.api_key = OPENAI_API_KEY
+# Initialize OpenAI client (replace the old initialization)
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Create necessary directories
 os.makedirs(BRAND_GUIDELINES_DIR, exist_ok=True)
@@ -257,7 +257,7 @@ async def scrape_amazon_listing_details(url: str) -> dict:
 @retry(
     stop=stop_after_attempt(MAX_RETRIES),
     wait=wait_exponential(multiplier=1, min=4, max=10),
-    retry=retry_if_exception_type((openai.error.RateLimitError, openai.error.APIError))
+    retry=retry_if_exception_type((RateLimitError, APIError))
 )
 def call_openai_api(prompt: str, model: str = GPT_MODEL, temperature: float = 0.5, response_format: dict = None) -> str:
     logger.info("Calling OpenAI API...")
@@ -269,27 +269,22 @@ def call_openai_api(prompt: str, model: str = GPT_MODEL, temperature: float = 0.
                 {"role": "user", "content": prompt}
             ],
             "temperature": temperature,
-            "max_tokens": 4096
         }
         if response_format:
             kwargs["response_format"] = response_format
-        response = openai.ChatCompletion.create(**kwargs)
-        content = response.choices[0].message['content']
+
+        response = client.chat.completions.create(**kwargs)
+        content = response.choices[0].message.content
         logger.info("OpenAI API call successful.")
         return content
-    except openai.error.InvalidRequestError as e:
-        logger.error(f"OpenAI API Invalid Request Error: {e}")
-        if "token" in str(e).lower() and len(prompt) > 4000:
-            logger.info("Token limit likely exceeded, retrying with shorter prompt.")
-            shortened_prompt = prompt[:4000] + "\n[Content truncated due to length. Please summarize based on available data.]"
-            kwargs["messages"][1]["content"] = shortened_prompt
-            response = openai.ChatCompletion.create(**kwargs)
-            content = response.choices[0].message['content']
-            logger.info("Retry with shorter prompt successful.")
-            return content
+    except RateLimitError as e:
+        logger.error(f"OpenAI API Rate Limit Error: {e}")
+        raise
+    except APIError as e:
+        logger.error(f"OpenAI API Error: {e}")
         raise
     except Exception as e:
-        logger.error(f"OpenAI API error: {e}")
+        logger.error(f"Unexpected error in OpenAI API call: {e}")
         raise
 
 def extract_and_transform_voc(reviews: List[str], qna: List[str], top_n: int = 3) -> str:
