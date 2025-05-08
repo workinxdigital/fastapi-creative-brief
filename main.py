@@ -6,8 +6,8 @@ import logging
 from io import BytesIO
 from typing import List, Optional, Union, Dict
 import asyncio
-import requests
 
+import requests
 from fastapi import FastAPI, File, Form, UploadFile, Request, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -63,7 +63,7 @@ ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:3000",
     "http://localhost:8000",
-    "https://stupendous-licorice-8114c0.netlify.app/",  # Add your Netlify domain
+    "https://stupendous-licorice-8114c0.netlify.app",  # Removed trailing slash
     os.getenv("FRONTEND_URL", "")
 ]
 GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4")
@@ -71,16 +71,21 @@ MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 BRAND_GUIDELINES_DIR = os.getenv("BRAND_GUIDELINES_DIR", "brand_guidelines")
 PDF_EXPORTS_DIR = os.getenv("PDF_EXPORTS_DIR", "pdf_exports")
 
+# Initialize OpenAI
+import openai
+openai.api_key = OPENAI_API_KEY
+
 # Create necessary directories
 os.makedirs(BRAND_GUIDELINES_DIR, exist_ok=True)
 os.makedirs(PDF_EXPORTS_DIR, exist_ok=True)
+
 
 app = FastAPI(title="Creative Brief Generator API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Added OPTIONS
     allow_headers=["*"]
 )
 
@@ -230,9 +235,14 @@ async def scrape_amazon_listing_details(url: str) -> dict:
         logger.error(f"Error during Playwright Amazon scraping for {url}: {e}. Falling back to requests method.")
         try:
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1"
             }
-            response = requests.get(url, headers=headers, timeout=10)
+            response = requests.get(url, headers=headers, timeout=15)
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, 'html.parser')
                 title_element = soup.select_one('#productTitle')
@@ -261,6 +271,7 @@ async def scrape_amazon_listing_details(url: str) -> dict:
 def call_openai_api(prompt: str, model: str = GPT_MODEL, temperature: float = 0.5, response_format: dict = None) -> str:
     logger.info("Calling OpenAI API...")
     try:
+        # Using the requests library directly to avoid client issues
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
             "Content-Type": "application/json"
@@ -585,6 +596,14 @@ def upload_to_drive(file_path: str, filename: str):
         raise
 
 # --- FASTAPI ROUTES ---
+@app.api_route("/", methods=["GET", "HEAD"])
+async def root(request: Request):
+    if request.method == "HEAD":
+        # For HEAD requests, return an empty response with 200 status
+        return {}
+    # For GET requests, return your normal response
+    return {"status": "online", "message": "Creative Brief Generator API is running", "docs_url": "/docs"}
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unexpected error occurred: {str(exc)}")
@@ -667,9 +686,7 @@ def get_editable_form(session_id: int):
             "finalized": session.finalized,
             "section_status": section_status
         }
-@app.get("/")
-async def root():
-    return {"status": "online", "message": "Creative Brief Generator API is running", "docs_url": "/docs"}
+
 class EditedFormInput(BaseModel):
     session_id: int
     sections: List[dict]
