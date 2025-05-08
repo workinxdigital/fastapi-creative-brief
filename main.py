@@ -52,7 +52,7 @@ if not os.path.exists(SERVICE_ACCOUNT_FILE):
     logger.error(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
     raise FileNotFoundError(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
 
-GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+GOOGLE_DRIVE_FOLDER_ID = "o17YHVHs1oRA3fj9iPcN5hIo0FXXm_XB8W"
 if not GOOGLE_DRIVE_FOLDER_ID:
     logger.error("GOOGLE_DRIVE_FOLDER_ID not found in environment variables")
     raise ValueError("GOOGLE_DRIVE_FOLDER_ID is required")
