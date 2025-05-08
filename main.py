@@ -278,8 +278,8 @@ def call_openai_api(prompt: str, model: str = GPT_MODEL, temperature: float = 0.
         if response_format:
             kwargs["response_format"] = response_format
 
-        response = openai.ChatCompletion.create(**kwargs)
-        content = response.choices[0].message['content']
+        response = openai.chat.completions.create(**kwargs)
+        content = response.choices[0].message.content
         logger.info("OpenAI API call successful.")
         return content
     except Exception as e:
@@ -288,8 +288,8 @@ def call_openai_api(prompt: str, model: str = GPT_MODEL, temperature: float = 0.
             logger.info("Token limit likely exceeded, retrying with shorter prompt.")
             shortened_prompt = prompt[:4000] + "\n[Content truncated due to length. Please summarize based on available data.]"
             kwargs["messages"][1]["content"] = shortened_prompt
-            response = openai.ChatCompletion.create(**kwargs)
-            content = response.choices[0].message['content']
+            response = openai.chat.completions.create(**kwargs)
+            content = response.choices[0].message.content
             logger.info("Retry with shorter prompt successful.")
             return content
         raise
