@@ -63,7 +63,8 @@ ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:3000",
     "http://localhost:8000",
-    "https://stupendous-licorice-8114c0.netlify.app",  # Removed trailing slash
+    "https://stupendous-licorice-8114c0.netlify.app",
+    "https://onboarding.workinxdigital.com",  # Removed trailing slash
     os.getenv("FRONTEND_URL", "")
 ]
 GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4")
