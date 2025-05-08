@@ -63,7 +63,8 @@ ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:3000",
     "http://localhost:8000",
-    os.getenv("FRONTEND_URL", "")  # Add your frontend URL as an environment variable
+    "https://stupendous-licorice-8114c0.netlify.app/",  # Add your Netlify domain
+    os.getenv("FRONTEND_URL", "")
 ]
 GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4")
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
