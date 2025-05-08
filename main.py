@@ -52,7 +52,7 @@ if not os.path.exists(SERVICE_ACCOUNT_FILE):
     logger.error(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
     raise FileNotFoundError(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
 
-GOOGLE_DRIVE_FOLDER_ID = "o17YHVHs1oRA3fj9iPcN5hIo0FXXm_XB8W"
+GOOGLE_DRIVE_FOLDER_ID = "17YHVHs1oRA3fj9iPcN5hIo0FXXm_XB8W"
 if not GOOGLE_DRIVE_FOLDER_ID:
     logger.error("GOOGLE_DRIVE_FOLDER_ID not found in environment variables")
     raise ValueError("GOOGLE_DRIVE_FOLDER_ID is required")
@@ -600,22 +600,47 @@ def upload_to_drive(file_path: str, filename: str):
         try:
             with open(service_account_path, 'r') as f:
                 content = f.read()
-                logger.info(f"Service account file size: {len(content)} bytes")
-                if not content.strip():
-                    logger.error("Service account file is empty")
-                    return None, None
+            logger.info(f"Service account file size: {len(content)} bytes")
+            if not content.strip():
+                logger.error("Service account file is empty")
+                return None, None
 
-                # Try parsing the JSON to see if it's valid
-                try:
-                    json_content = json.loads(content)
-                    logger.info("Service account JSON is valid")
-                except json.JSONDecodeError as json_err:
-                    logger.error(f"Invalid JSON in service account file: {str(json_err)}")
-                    return None, None
+            # Try parsing the JSON to see if it's valid
+            try:
+                json_content = json.loads(content)
+                logger.info("Service account JSON is valid")
+            except json.JSONDecodeError as json_err:
+                logger.error(f"Invalid JSON in service account file: {str(json_err)}")
+                return None, None
         except Exception as file_err:
             logger.error(f"Error reading service account file: {str(file_err)}")
             return None, None
 
+        # Continue with normal flow
+        creds = service_account.Credentials.from_service_account_file(
+            service_account_path, scopes=SCOPES)
+
+        service = build('drive', 'v3', credentials=creds)
+
+        # Get the mime type based on file extension
+        mime_type = 'application/pdf'  # Use PDF mime type
+
+        # Use the correct folder ID directly
+        file_metadata = {
+            'name': filename,
+            'parents': [GOOGLE_DRIVE_FOLDER_ID]  # Add to specified folder
+        }
+
+        media = MediaFileUpload(file_path, mimetype=mime_type)
+        file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
+
+        logger.info(f'File ID: {file.get("id")}')
+        logger.info(f'File Link: {file.get("webViewLink")}')
+
+        return file.get('id'), file.get('webViewLink')
+    except Exception as e:
+        logger.error(f"Error uploading to Google Drive: {str(e)}")
+        return None, None
         # Continue with normal flow
         creds = service_account.Credentials.from_service_account_file(
             service_account_path, scopes=SCOPES)
