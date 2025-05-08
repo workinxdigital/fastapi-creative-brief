@@ -7,7 +7,6 @@ from io import BytesIO
 from typing import List, Optional, Union, Dict
 import asyncio
 
-from openai import OpenAI, RateLimitError, APIError
 import requests
 from fastapi import FastAPI, File, Form, UploadFile, Request, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +25,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 from sqlmodel import Field, Session, SQLModel, create_engine
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from dotenv import load_dotenv
+from openai import OpenAI
 
 # Load environment variables from .env file
 load_dotenv()
@@ -42,6 +42,9 @@ if not OPENAI_API_KEY:
 
 # Database Configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///intake_sessions.db")
+# Auto-correct PostgreSQL URLs if needed
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 logger.info(f"Using database: {DATABASE_URL}")
 
 # Google Drive Configuration
@@ -68,7 +71,7 @@ MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 BRAND_GUIDELINES_DIR = os.getenv("BRAND_GUIDELINES_DIR", "brand_guidelines")
 PDF_EXPORTS_DIR = os.getenv("PDF_EXPORTS_DIR", "pdf_exports")
 
-# Initialize OpenAI client (replace the old initialization)
+# Initialize OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Create necessary directories
@@ -257,18 +260,20 @@ async def scrape_amazon_listing_details(url: str) -> dict:
 @retry(
     stop=stop_after_attempt(MAX_RETRIES),
     wait=wait_exponential(multiplier=1, min=4, max=10),
-    retry=retry_if_exception_type((RateLimitError, APIError))
+    retry=retry_if_exception_type((Exception))
 )
 def call_openai_api(prompt: str, model: str = GPT_MODEL, temperature: float = 0.5, response_format: dict = None) -> str:
     logger.info("Calling OpenAI API...")
     try:
+        messages = [
+            {"role": "system", "content": "You are an expert Amazon strategist."},
+            {"role": "user", "content": prompt}
+        ]
         kwargs = {
             "model": model,
-            "messages": [
-                {"role": "system", "content": "You are an expert Amazon strategist."},
-                {"role": "user", "content": prompt}
-            ],
+            "messages": messages,
             "temperature": temperature,
+            "max_tokens": 4096
         }
         if response_format:
             kwargs["response_format"] = response_format
@@ -277,14 +282,16 @@ def call_openai_api(prompt: str, model: str = GPT_MODEL, temperature: float = 0.
         content = response.choices[0].message.content
         logger.info("OpenAI API call successful.")
         return content
-    except RateLimitError as e:
-        logger.error(f"OpenAI API Rate Limit Error: {e}")
-        raise
-    except APIError as e:
-        logger.error(f"OpenAI API Error: {e}")
-        raise
     except Exception as e:
-        logger.error(f"Unexpected error in OpenAI API call: {e}")
+        logger.error(f"OpenAI API error: {e}")
+        if "token" in str(e).lower() and len(prompt) > 4000:
+            logger.info("Token limit likely exceeded, retrying with shorter prompt.")
+            shortened_prompt = prompt[:4000] + "\n[Content truncated due to length. Please summarize based on available data.]"
+            messages[1]["content"] = shortened_prompt
+            response = client.chat.completions.create(**kwargs)
+            content = response.choices[0].message.content
+            logger.info("Retry with shorter prompt successful.")
+            return content
         raise
 
 def extract_and_transform_voc(reviews: List[str], qna: List[str], top_n: int = 3) -> str:
@@ -394,68 +401,68 @@ def generate_creative_brief(inputs: dict, website_data: str, amazon_details: dic
 
     **JSON Structure to Generate:**
     {{"editable_sections": [
-    {{"title": "PROJECT OVERVIEW", "questions": [
-    {{"question": "Project Name", "answer": ""}},
-    {{"question": "Brand Name", "answer": ""}},
-    {{"question": "Website", "answer": ""}},
-    {{"question": "Amazon Listing (if available)", "answer": "{inputs.get('amazon_listing', '')}"}},
-    {{"question": "Instagram Handle (if applicable)", "answer": ""}}
-    ]}},
-    {{"title": "PRODUCT SNAPSHOT", "questions": [
-    {{"question": "What exactly is the product?", "answer": ""}},
-    {{"question": "What does it do and how does it work?", "answer": ""}},
-    {{"question": "What problem does it solve?", "answer": ""}},
-    {{"question": "Who is it meant for?", "answer": ""}}
-    ]}},
-    {{"title": "CURRENT LISTING CHALLENGES", "questions": [
-    {{"question": "What's broken or underwhelming about the current Amazon listing, brand positioning, or creative execution?", "answer": ""}},
-    {{"question": "Where are they losing conversions or attention?", "answer": ""}}
-    ]}},
-    {{"title": "TARGET CUSTOMER DEEP DIVE", "questions": [
-    {{"question": "Gender, age range, location, income, profession", "answer": ""}},
-    {{"question": "Life stage or identity (e.g., new moms, eco-conscious Gen Z, busy professionals)", "answer": ""}},
-    {{"question": "Pain points, desires, motivations", "answer": ""}},
-    {{"question": "How do they shop on Amazon? What do they care about when scrolling?", "answer": ""}}
-    ]}},
-    {{"title": "BARRIERS TO PURCHASE", "questions": [
-    {{"question": "List the common doubts, hesitations, or FAQ-style friction points that stop people from buying — even if they like the product.", "answer": ""}}
-    ]}},
-    {{"title": "BRAND VOICE & TONE", "questions": [
-    {{"question": "Describe the tone and copywriting style the brand uses or should use (e.g., bold, sassy, informative, premium, conversational).", "answer": ""}},
-    {{"question": "Include any signature words, phrases, or linguistic quirks.", "answer": ""}}
-    ]}},
-    {{"title": "USPs (UNIQUE SELLING PROPOSITIONS)", "questions": [
-    {{"question": "What makes this product meaningfully different from other options in the category?", "answer": ""}},
-    {{"question": "Think functional benefits, emotional angles, and cultural relevance.", "answer": ""}}
-    ]}},
-    {{"title": "5-SECOND WOW FACTOR", "questions": [
-    {{"question": "If a customer saw this listing for 5 seconds, what single visual hook, copy line, or feature would stop them in their tracks?", "answer": ""}}
-    ]}},
-    {{"title": "KEY FEATURES (WITH CONTEXT)", "questions": [
-    {{"question": "List 4–6 major features. But go beyond just the bullet points — explain: Why does this matter to the buyer? How does it connect to their lifestyle or values?", "answer": ""}}
-    ]}},
-    {{"title": "TOP 6 SELLING POINTS (WITH STRATEGIC JUSTIFICATION)", "questions": [
-    {{"question": "For each of the client's selected selling points: State the point. Explain *why* it's strategically powerful for this product and customer.", "answer": ""}}
-    ]}},
-    {{"title": "COMPETITIVE LANDSCAPE", "questions": [
-    {{"question": "List 2–3 main competitors", "answer": ""}},
-    {{"question": "Describe how this product compares", "answer": ""}},
-    {{"question": "Mention any Amazon-specific differentiators (e.g. bundle, shipping time, design)", "answer": ""}}
-    ]}},
-    {{"title": "SEARCH & KEYWORDS STRATEGY", "questions": [
-    {{"question": "Suggest relevant search terms and niche keywords to target. These should align with user intent, category trends, or long-tail SEO goals.", "answer": ""}}
-    ]}},
-    {{"title": "BRAND STORY, VALUES & PURPOSE", "questions": [
-    {{"question": "Give a short but meaningful brand origin story or founder story.", "answer": ""}},
-    {{"question": "Highlight core values, emotional drivers, or the \"bigger why\" behind the brand's existence.", "answer": ""}}
-    ]}},
-    {{"title": "DESIGN DIRECTION", "questions": [
-    {{"question": "Summarize the client's aesthetic preferences", "answer": ""}},
-    {{"question": "Suggest how the visuals, layout, or color themes should feel (e.g., clean/minimal, bold/graphic, warm/natural)", "answer": ""}}
-    ]}},
-    {{"title": "FINAL NOTES & STRATEGIC CALLOUTS", "questions": [
-    {{"question": "Include any extra insights for the creative team, such as: Packaging or compliance considerations, Customer education needs, Cross-sell or upsell potential, Social proof or influencer angles", "answer": ""}}
-    ]}}
+        {{"title": "PROJECT OVERVIEW", "questions": [
+            {{"question": "Project Name", "answer": ""}},
+            {{"question": "Brand Name", "answer": ""}},
+            {{"question": "Website", "answer": ""}},
+            {{"question": "Amazon Listing (if available)", "answer": "{inputs.get('amazon_listing', '')}"}},
+            {{"question": "Instagram Handle (if applicable)", "answer": ""}}
+        ]}},
+        {{"title": "PRODUCT SNAPSHOT", "questions": [
+            {{"question": "What exactly is the product?", "answer": ""}},
+            {{"question": "What does it do and how does it work?", "answer": ""}},
+            {{"question": "What problem does it solve?", "answer": ""}},
+            {{"question": "Who is it meant for?", "answer": ""}}
+        ]}},
+        {{"title": "CURRENT LISTING CHALLENGES", "questions": [
+            {{"question": "What's broken or underwhelming about the current Amazon listing, brand positioning, or creative execution?", "answer": ""}},
+            {{"question": "Where are they losing conversions or attention?", "answer": ""}}
+        ]}},
+        {{"title": "TARGET CUSTOMER DEEP DIVE", "questions": [
+            {{"question": "Gender, age range, location, income, profession", "answer": ""}},
+            {{"question": "Life stage or identity (e.g., new moms, eco-conscious Gen Z, busy professionals)", "answer": ""}},
+            {{"question": "Pain points, desires, motivations", "answer": ""}},
+            {{"question": "How do they shop on Amazon? What do they care about when scrolling?", "answer": ""}}
+        ]}},
+        {{"title": "BARRIERS TO PURCHASE", "questions": [
+            {{"question": "List the common doubts, hesitations, or FAQ-style friction points that stop people from buying — even if they like the product.", "answer": ""}}
+        ]}},
+        {{"title": "BRAND VOICE & TONE", "questions": [
+            {{"question": "Describe the tone and copywriting style the brand uses or should use (e.g., bold, sassy, informative, premium, conversational).", "answer": ""}},
+            {{"question": "Include any signature words, phrases, or linguistic quirks.", "answer": ""}}
+        ]}},
+        {{"title": "USPs (UNIQUE SELLING PROPOSITIONS)", "questions": [
+            {{"question": "What makes this product meaningfully different from other options in the category?", "answer": ""}},
+            {{"question": "Think functional benefits, emotional angles, and cultural relevance.", "answer": ""}}
+        ]}},
+        {{"title": "5-SECOND WOW FACTOR", "questions": [
+            {{"question": "If a customer saw this listing for 5 seconds, what single visual hook, copy line, or feature would stop them in their tracks?", "answer": ""}}
+        ]}},
+        {{"title": "KEY FEATURES (WITH CONTEXT)", "questions": [
+            {{"question": "List 4–6 major features. But go beyond just the bullet points — explain: Why does this matter to the buyer? How does it connect to their lifestyle or values?", "answer": ""}}
+        ]}},
+        {{"title": "TOP 6 SELLING POINTS (WITH STRATEGIC JUSTIFICATION)", "questions": [
+            {{"question": "For each of the client's selected selling points: State the point. Explain *why* it's strategically powerful for this product and customer.", "answer": ""}}
+        ]}},
+        {{"title": "COMPETITIVE LANDSCAPE", "questions": [
+            {{"question": "List 2–3 main competitors", "answer": ""}},
+            {{"question": "Describe how this product compares", "answer": ""}},
+            {{"question": "Mention any Amazon-specific differentiators (e.g. bundle, shipping time, design)", "answer": ""}}
+        ]}},
+        {{"title": "SEARCH & KEYWORDS STRATEGY", "questions": [
+            {{"question": "Suggest relevant search terms and niche keywords to target. These should align with user intent, category trends, or long-tail SEO goals.", "answer": ""}}
+        ]}},
+        {{"title": "BRAND STORY, VALUES & PURPOSE", "questions": [
+            {{"question": "Give a short but meaningful brand origin story or founder story.", "answer": ""}},
+            {{"question": "Highlight core values, emotional drivers, or the \"bigger why\" behind the brand's existence.", "answer": ""}}
+        ]}},
+        {{"title": "DESIGN DIRECTION", "questions": [
+            {{"question": "Summarize the client's aesthetic preferences", "answer": ""}},
+            {{"question": "Suggest how the visuals, layout, or color themes should feel (e.g., clean/minimal, bold/graphic, warm/natural)", "answer": ""}}
+        ]}},
+        {{"title": "FINAL NOTES & STRATEGIC CALLOUTS", "questions": [
+            {{"question": "Include any extra insights for the creative team, such as: Packaging or compliance considerations, Customer education needs, Cross-sell or upsell potential, Social proof or influencer angles", "answer": ""}}
+        ]}}
     ]}}
 
     Generate the JSON output now:
@@ -522,7 +529,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                         if q:
                             story.append(Paragraph(q, question_style))
                             story.append(Paragraph(a.replace("\n", "<br />"), answer_style))
-                    story.append(Spacer(1, 0.1 * inch))
+                story.append(Spacer(1, 0.1 * inch))
 
             doc.build(story)
             logger.info(f"PDF generated at {pdf_path} for session {session_id}.")
@@ -611,7 +618,7 @@ async def collect_input(
         db.commit()
         db.refresh(session)
         logger.info(f"Session {session.id} created successfully.")
-        return {"session_id": session.id, "form": form_json_sections}
+    return {"session_id": session.id, "form": form_json_sections}
 
 @app.get("/get-editable-form/{session_id}")
 def get_editable_form(session_id: int):
