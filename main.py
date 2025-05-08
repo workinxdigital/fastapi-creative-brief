@@ -25,7 +25,6 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 from sqlmodel import Field, Session, SQLModel, create_engine
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from dotenv import load_dotenv
-from openai import OpenAI
 
 # Load environment variables from .env file
 load_dotenv()
@@ -72,7 +71,8 @@ BRAND_GUIDELINES_DIR = os.getenv("BRAND_GUIDELINES_DIR", "brand_guidelines")
 PDF_EXPORTS_DIR = os.getenv("PDF_EXPORTS_DIR", "pdf_exports")
 
 # Initialize OpenAI
-client = OpenAI(api_key=OPENAI_API_KEY)
+import openai
+openai.api_key = OPENAI_API_KEY
 
 # Create necessary directories
 os.makedirs(BRAND_GUIDELINES_DIR, exist_ok=True)
@@ -265,21 +265,20 @@ async def scrape_amazon_listing_details(url: str) -> dict:
 def call_openai_api(prompt: str, model: str = GPT_MODEL, temperature: float = 0.5, response_format: dict = None) -> str:
     logger.info("Calling OpenAI API...")
     try:
-        messages = [
-            {"role": "system", "content": "You are an expert Amazon strategist."},
-            {"role": "user", "content": prompt}
-        ]
         kwargs = {
             "model": model,
-            "messages": messages,
+            "messages": [
+                {"role": "system", "content": "You are an expert Amazon strategist."},
+                {"role": "user", "content": prompt}
+            ],
             "temperature": temperature,
             "max_tokens": 4096
         }
         if response_format:
             kwargs["response_format"] = response_format
 
-        response = client.chat.completions.create(**kwargs)
-        content = response.choices[0].message.content
+        response = openai.ChatCompletion.create(**kwargs)
+        content = response.choices[0].message['content']
         logger.info("OpenAI API call successful.")
         return content
     except Exception as e:
@@ -287,9 +286,9 @@ def call_openai_api(prompt: str, model: str = GPT_MODEL, temperature: float = 0.
         if "token" in str(e).lower() and len(prompt) > 4000:
             logger.info("Token limit likely exceeded, retrying with shorter prompt.")
             shortened_prompt = prompt[:4000] + "\n[Content truncated due to length. Please summarize based on available data.]"
-            messages[1]["content"] = shortened_prompt
-            response = client.chat.completions.create(**kwargs)
-            content = response.choices[0].message.content
+            kwargs["messages"][1]["content"] = shortened_prompt
+            response = openai.ChatCompletion.create(**kwargs)
+            content = response.choices[0].message['content']
             logger.info("Retry with shorter prompt successful.")
             return content
         raise
