@@ -586,7 +586,8 @@ def upload_to_drive(file_path: str, filename: str):
         # Try multiple possible locations for the service account file
         possible_paths = [
             os.getenv("SERVICE_ACCOUNT_FILE", "/opt/render/project/src/service_account.json"),
-            "/etc/secrets/service_account.json"  # Render's standard secret file location
+            "/etc/secrets/service_account.json",  # Render's standard secret file location
+            "service_account.json"  # Local file in current directory
         ]
 
         service_account_path = None
@@ -619,6 +620,31 @@ def upload_to_drive(file_path: str, filename: str):
         except Exception as file_err:
             logger.error(f"Error reading service account file: {str(file_err)}")
             return None, None
+
+        # Continue with normal flow
+        creds = service_account.Credentials.from_service_account_file(
+            service_account_path, scopes=SCOPES)
+
+        service = build('drive', 'v3', credentials=creds)
+
+        # Get the mime type based on file extension
+        mime_type = 'application/pdf'  # Use PDF mime type instead of Google Docs
+
+        file_metadata = {
+            'name': filename,
+            'parents': [GOOGLE_DRIVE_FOLDER_ID]  # Add to specified folder
+        }
+
+        media = MediaFileUpload(file_path, mimetype=mime_type)
+        file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
+
+        logger.info(f'File ID: {file.get("id")}')
+        logger.info(f'File Link: {file.get("webViewLink")}')
+
+        return file.get('id'), file.get('webViewLink')
+    except Exception as e:
+        logger.error(f"Error uploading to Google Drive: {str(e)}")
+        return None, None
 
         # Continue with normal flow
         creds = service_account.Credentials.from_service_account_file(
