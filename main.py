@@ -6,8 +6,8 @@ import logging
 from io import BytesIO
 from typing import List, Optional, Union, Dict
 import asyncio
-
 import requests
+
 from fastapi import FastAPI, File, Form, UploadFile, Request, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -71,14 +71,9 @@ MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 BRAND_GUIDELINES_DIR = os.getenv("BRAND_GUIDELINES_DIR", "brand_guidelines")
 PDF_EXPORTS_DIR = os.getenv("PDF_EXPORTS_DIR", "pdf_exports")
 
-# Initialize OpenAI
-import openai
-openai.api_key = OPENAI_API_KEY
-
 # Create necessary directories
 os.makedirs(BRAND_GUIDELINES_DIR, exist_ok=True)
 os.makedirs(PDF_EXPORTS_DIR, exist_ok=True)
-
 
 app = FastAPI(title="Creative Brief Generator API")
 app.add_middleware(
@@ -266,21 +261,36 @@ async def scrape_amazon_listing_details(url: str) -> dict:
 def call_openai_api(prompt: str, model: str = GPT_MODEL, temperature: float = 0.5, response_format: dict = None) -> str:
     logger.info("Calling OpenAI API...")
     try:
-        messages = [
-            {"role": "system", "content": "You are an expert Amazon strategist."},
-            {"role": "user", "content": prompt}
-        ]
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
 
-        # Use the older style API
-        response = openai.ChatCompletion.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=4096,
-            response_format=response_format if response_format else None
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You are an expert Amazon strategist."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": temperature,
+            "max_tokens": 4096
+        }
+
+        if response_format:
+            payload["response_format"] = response_format
+
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload
         )
 
-        content = response.choices[0].message.content
+        if response.status_code != 200:
+            logger.error(f"OpenAI API returned status code {response.status_code}: {response.text}")
+            raise Exception(f"OpenAI API error: {response.text}")
+
+        response_data = response.json()
+        content = response_data["choices"][0]["message"]["content"]
         logger.info("OpenAI API call successful.")
         return content
     except Exception as e:
@@ -288,18 +298,32 @@ def call_openai_api(prompt: str, model: str = GPT_MODEL, temperature: float = 0.
         if "token" in str(e).lower() and len(prompt) > 4000:
             logger.info("Token limit likely exceeded, retrying with shorter prompt.")
             shortened_prompt = prompt[:4000] + "\n[Content truncated due to length. Please summarize based on available data.]"
-            messages = [
-                {"role": "system", "content": "You are an expert Amazon strategist."},
-                {"role": "user", "content": shortened_prompt}
-            ]
-            response = openai.ChatCompletion.create(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=4096,
-                response_format=response_format if response_format else None
+
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are an expert Amazon strategist."},
+                    {"role": "user", "content": shortened_prompt}
+                ],
+                "temperature": temperature,
+                "max_tokens": 4096
+            }
+
+            if response_format:
+                payload["response_format"] = response_format
+
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload
             )
-            content = response.choices[0].message.content
+
+            if response.status_code != 200:
+                logger.error(f"OpenAI API returned status code {response.status_code}: {response.text}")
+                raise Exception(f"OpenAI API error: {response.text}")
+
+            response_data = response.json()
+            content = response_data["choices"][0]["message"]["content"]
             logger.info("Retry with shorter prompt successful.")
             return content
         raise
