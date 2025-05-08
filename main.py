@@ -583,23 +583,18 @@ def generate_pdf_in_background(session_id: int, project_name: str):
 
 def upload_to_drive(file_path: str, filename: str):
     try:
-        # Try multiple possible locations for the service account file
-        possible_paths = [
-            os.getenv("SERVICE_ACCOUNT_FILE", "/opt/render/project/src/service_account.json"),
-            "/etc/secrets/service_account.json",  # Render's standard secret file location
-            "service_account.json"  # Local file in current directory
-        ]
+        # For Render deployment, the service account file should be at this location
+        service_account_path = "/etc/secrets/service_account.json"
 
-        service_account_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                logger.info(f"Found service account file at {path}")
-                service_account_path = path
-                break
+        if not os.path.exists(service_account_path):
+            logger.error(f"Service account file not found at {service_account_path}")
+            # Try fallback location
+            service_account_path = os.getenv("SERVICE_ACCOUNT_FILE", "/opt/render/project/src/service_account.json")
+            if not os.path.exists(service_account_path):
+                logger.error(f"Service account file not found at fallback location {service_account_path}")
+                return None, None
 
-        if not service_account_path:
-            logger.error(f"Service account file not found at any of these locations: {possible_paths}")
-            return None, None
+        logger.info(f"Using service account file at {service_account_path}")
 
         # Debug file content
         try:
@@ -620,6 +615,62 @@ def upload_to_drive(file_path: str, filename: str):
         except Exception as file_err:
             logger.error(f"Error reading service account file: {str(file_err)}")
             return None, None
+
+        # Continue with normal flow
+        creds = service_account.Credentials.from_service_account_file(
+            service_account_path, scopes=SCOPES)
+
+        service = build('drive', 'v3', credentials=creds)
+
+        # Get the mime type based on file extension
+        mime_type = 'application/pdf'  # Use PDF mime type instead of Google Docs
+
+        # Check if folder exists or create it
+        folder_id = None
+        folder_name = "Intake Form"
+
+        # First try to find the folder
+        results = service.files().list(
+            q=f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false",
+            spaces='drive',
+            fields='files(id, name)'
+        ).execute()
+
+        folders = results.get('files', [])
+
+        if folders:
+            # Folder exists, use the first one
+            folder_id = folders[0]['id']
+            logger.info(f"Found existing folder: {folder_name} with ID: {folder_id}")
+        else:
+            # Create a new folder
+            folder_metadata = {
+                'name': folder_name,
+                'mimeType': 'application/vnd.google-apps.folder'
+            }
+            folder = service.files().create(body=folder_metadata, fields='id').execute()
+            folder_id = folder.get('id')
+            logger.info(f"Created new folder: {folder_name} with ID: {folder_id}")
+
+        # Now upload the file to the folder
+        file_metadata = {
+            'name': filename
+        }
+
+        # Only add parent folder if we have a valid folder ID
+        if folder_id:
+            file_metadata['parents'] = [folder_id]
+
+        media = MediaFileUpload(file_path, mimetype=mime_type)
+        file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
+
+        logger.info(f'File ID: {file.get("id")}')
+        logger.info(f'File Link: {file.get("webViewLink")}')
+
+        return file.get('id'), file.get('webViewLink')
+    except Exception as e:
+        logger.error(f"Error uploading to Google Drive: {str(e)}")
+        return None, None
 
         # Continue with normal flow
         creds = service_account.Credentials.from_service_account_file(
