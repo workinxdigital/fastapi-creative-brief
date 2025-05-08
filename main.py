@@ -72,8 +72,8 @@ BRAND_GUIDELINES_DIR = os.getenv("BRAND_GUIDELINES_DIR", "brand_guidelines")
 PDF_EXPORTS_DIR = os.getenv("PDF_EXPORTS_DIR", "pdf_exports")
 
 # Initialize OpenAI
-from openai import OpenAI
-client = OpenAI(api_key=OPENAI_API_KEY)
+import openai
+openai.api_key = OPENAI_API_KEY
 
 # Create necessary directories
 os.makedirs(BRAND_GUIDELINES_DIR, exist_ok=True)
@@ -266,20 +266,20 @@ async def scrape_amazon_listing_details(url: str) -> dict:
 def call_openai_api(prompt: str, model: str = GPT_MODEL, temperature: float = 0.5, response_format: dict = None) -> str:
     logger.info("Calling OpenAI API...")
     try:
-        kwargs = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "You are an expert Amazon strategist."},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": temperature,
-            "max_tokens": 4096
-        }
-        if response_format:
-            kwargs["response_format"] = response_format
+        messages = [
+            {"role": "system", "content": "You are an expert Amazon strategist."},
+            {"role": "user", "content": prompt}
+        ]
 
-        # Use the client instance instead of the module
-        response = client.chat.completions.create(**kwargs)
+        # Use the older style API
+        response = openai.ChatCompletion.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=4096,
+            response_format=response_format if response_format else None
+        )
+
         content = response.choices[0].message.content
         logger.info("OpenAI API call successful.")
         return content
@@ -288,8 +288,17 @@ def call_openai_api(prompt: str, model: str = GPT_MODEL, temperature: float = 0.
         if "token" in str(e).lower() and len(prompt) > 4000:
             logger.info("Token limit likely exceeded, retrying with shorter prompt.")
             shortened_prompt = prompt[:4000] + "\n[Content truncated due to length. Please summarize based on available data.]"
-            kwargs["messages"][1]["content"] = shortened_prompt
-            response = client.chat.completions.create(**kwargs)
+            messages = [
+                {"role": "system", "content": "You are an expert Amazon strategist."},
+                {"role": "user", "content": shortened_prompt}
+            ]
+            response = openai.ChatCompletion.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=4096,
+                response_format=response_format if response_format else None
+            )
             content = response.choices[0].message.content
             logger.info("Retry with shorter prompt successful.")
             return content
