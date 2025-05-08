@@ -47,7 +47,7 @@ if DATABASE_URL.startswith("postgres://"):
 logger.info(f"Using database: {DATABASE_URL}")
 
 # Google Drive Configuration
-SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "service_account.json")
+SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "/opt/render/project/src/service_account.json")
 if not os.path.exists(SERVICE_ACCOUNT_FILE):
     logger.error(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
     raise FileNotFoundError(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
@@ -583,17 +583,86 @@ def generate_pdf_in_background(session_id: int, project_name: str):
 
 def upload_to_drive(file_path: str, filename: str):
     try:
-        creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        # Try multiple possible locations for the service account file
+        possible_paths = [
+            os.getenv("SERVICE_ACCOUNT_FILE", "/opt/render/project/src/service_account.json"),
+            "/etc/secrets/service_account.json"  # Render's standard secret file location
+        ]
+
+        service_account_path = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                logger.info(f"Found service account file at {path}")
+                service_account_path = path
+                break
+
+        if not service_account_path:
+            logger.error(f"Service account file not found at any of these locations: {possible_paths}")
+            return None, None
+
+        # Debug file content
+        try:
+            with open(service_account_path, 'r') as f:
+                content = f.read()
+                logger.info(f"Service account file size: {len(content)} bytes")
+                if not content.strip():
+                    logger.error("Service account file is empty")
+                    return None, None
+
+                # Try parsing the JSON to see if it's valid
+                try:
+                    json_content = json.loads(content)
+                    logger.info("Service account JSON is valid")
+                except json.JSONDecodeError as json_err:
+                    logger.error(f"Invalid JSON in service account file: {str(json_err)}")
+                    return None, None
+        except Exception as file_err:
+            logger.error(f"Error reading service account file: {str(file_err)}")
+            return None, None
+
+        # Continue with normal flow
+        creds = service_account.Credentials.from_service_account_file(
+            service_account_path, scopes=SCOPES)
+
         service = build('drive', 'v3', credentials=creds)
-        file_metadata = {'name': filename, 'parents': [GOOGLE_DRIVE_FOLDER_ID]}
-        media = MediaFileUpload(file_path, mimetype='application/pdf', resumable=True)
-        logger.info(f"Uploading {filename} to Google Drive...")
+
+        file_metadata = {
+            'name': filename,
+            'mimeType': 'application/vnd.google-apps.document'
+        }
+
+        media = MediaFileUpload(file_path, mimetype='text/plain')
         file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
-        logger.info(f"File uploaded. ID: {file.get('id')}")
+
+        logger.info(f'File ID: {file.get("id")}')
+        logger.info(f'File Link: {file.get("webViewLink")}')
+
         return file.get('id'), file.get('webViewLink')
     except Exception as e:
-        logger.error(f"Error uploading to Google Drive: {e}")
-        raise
+        logger.error(f"Error uploading to Google Drive: {str(e)}")
+        return None, None
+
+        # Continue with normal flow
+        creds = service_account.Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+
+        service = build('drive', 'v3', credentials=creds)
+
+        file_metadata = {
+            'name': filename,
+            'mimeType': 'application/vnd.google-apps.document'
+        }
+
+        media = MediaFileUpload(file_path, mimetype='text/plain')
+        file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
+
+        logger.info(f'File ID: {file.get("id")}')
+        logger.info(f'File Link: {file.get("webViewLink")}')
+
+        return file.get('id'), file.get('webViewLink')
+    except Exception as e:
+        logger.error(f"Error uploading to Google Drive: {str(e)}")
+        return None, None
 
 # --- FASTAPI ROUTES ---
 @app.api_route("/", methods=["GET", "HEAD"])
