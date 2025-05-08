@@ -667,7 +667,9 @@ def get_editable_form(session_id: int):
             "finalized": session.finalized,
             "section_status": section_status
         }
-
+@app.get("/")
+async def root():
+    return {"status": "online", "message": "Creative Brief Generator API is running", "docs_url": "/docs"}
 class EditedFormInput(BaseModel):
     session_id: int
     sections: List[dict]
@@ -779,5 +781,6 @@ def upload_pdf_to_drive_endpoint(session_id: int):
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info("Starting FastAPI server...")
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 8000))
+    logger.info(f"Starting FastAPI server on port {port}...")
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
