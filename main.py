@@ -104,6 +104,7 @@ class SessionData(SQLModel, table=True):
     finalized: bool = Field(default=False)
     section_status: str = Field(default="{}")
 
+
 # --- UTILITY FUNCTIONS ---
 def sanitize_filename(filename: str) -> str:
     sanitized = re.sub(r'[\\/*?:"<>|]', "_", filename)
@@ -174,10 +175,213 @@ async def scrape_website_text(url: str) -> str:
             full_text = ' '.join(filter(None, texts))
             await browser.close()
             logger.info(f"Website scraping successful for {url}.")
+
+            # Check if scraping returned minimal content
+            if len(full_text) < 100:
+                logger.warning(f"Website scraping returned minimal content for {url}. Will try fallback.")
+                raise Exception("Minimal content retrieved")
+
             return full_text
     except Exception as e:
         logger.error(f"Could not scrape website {url}: {e}")
-        return f"Could not scrape website: {e}"
+
+        # Check if scraping failed or returned minimal content
+        try:
+            logger.info(f"Website scraping failed, using enhanced web search fallback for: {url}")
+            # Create a query from the URL
+            domain = url.split("//")[-1].split("/")[0]
+
+            # Try to extract product name from URL path
+            path_parts = url.split("/")
+            product_hint = ""
+            if len(path_parts) > 3:
+                product_hint = path_parts[-1].replace("-", " ").replace(".html", "").replace(".php", "")
+
+            query = f"{domain} {product_hint} product information"
+
+            # Use the enhanced fallback to get website content
+            fallback_result = await enhanced_Web_Search_fallback(query)
+
+            # Extract text content from the fallback result
+            fallback_text = f"Title: {fallback_result['title']}\n"
+            fallback_text += f"Brand: {fallback_result['brand']}\n"
+            fallback_text += "Features:\n" + "\n".join([f"- {bullet}" for bullet in fallback_result['bullets']]) + "\n"
+            fallback_text += f"Description: {fallback_result['description']}\n\n"
+
+            # Add reviews if available
+            if fallback_result['reviews_raw']:
+                fallback_text += "Customer Feedback:\n" + "\n".join([f"- {review}" for review in fallback_result['reviews_raw'][:3]])
+
+            logger.info("Successfully retrieved website content via enhanced web search fallback")
+            return fallback_text
+        except Exception as fallback_err:
+            logger.error(f"Enhanced web search fallback for website content failed: {fallback_err}")
+            return f"Could not scrape website: {e}. Web search fallback also failed: {fallback_err}"
+async def enhanced_Web_Search_fallback(query: str, product_info: dict = None) -> dict:
+    """
+    Enhanced fallback function that uses a combination of web search and GPT-4
+    to gather comprehensive product information when scraping methods fail.
+    """
+    logger.info(f"Using enhanced web search fallback for: {query}")
+
+    # Initialize with any existing data or empty structure
+    details = product_info or {
+        "title": "Not Found", "brand": "Not Found", "bullets": [],
+        "description": "Not Found", "reviews_raw": [], "qna_raw": []
+    }
+
+    try:
+        # Step 1: Perform initial web search to identify the product
+        search_results = []
+
+        # Use the Web Search function to get real search results
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        # First search: General product information
+        general_query = f"{query} product details specifications"
+        payload = {
+            "model": "gpt-4o",  # Using the latest model for web search
+            "messages": [
+                {"role": "system", "content": "You are a helpful web search assistant."},
+                {"role": "user", "content": f"Search for: {general_query}"}
+            ],
+            "tools": [{"type": "Web Search"}],
+            "tool_choice": {"type": "Web Search"}
+        }
+
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload
+        )
+
+        if response.status_code == 200:
+            response_data = response.json()
+            tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+            if tool_calls:
+                search_results.append(tool_calls[0]["function"].get("arguments", "{}"))
+
+        # Second search: Reviews and customer feedback
+        if details["reviews_raw"] == []:
+            reviews_query = f"{query} product reviews customer feedback"
+            payload["messages"][1]["content"] = f"Search for: {reviews_query}"
+
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
+
+            if response.status_code == 200:
+                response_data = response.json()
+                tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+                if tool_calls:
+                    search_results.append(tool_calls[0]["function"].get("arguments", "{}"))
+
+        # Third search: Q&A and common questions
+        if details["qna_raw"] == []:
+            qna_query = f"{query} common questions answers FAQ"
+            payload["messages"][1]["content"] = f"Search for: {qna_query}"
+
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
+
+            if response.status_code == 200:
+                response_data = response.json()
+                tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+                if tool_calls:
+                    search_results.append(tool_calls[0]["function"].get("arguments", "{}"))
+
+        # Step 2: Process search results with GPT-4 to extract structured information
+        combined_search_results = "\n\n".join([json.loads(result).get("search_results", "") for result in search_results if result])
+
+        extraction_prompt = f"""
+        Based on the following web search results about a product, extract structured information in the requested format.
+
+        WEB SEARCH RESULTS:
+        {combined_search_results}
+
+        Extract the following information:
+        1. Product Title (full and accurate)
+        2. Brand Name
+        3. Key Features/Bullet Points (list at least 5 if available)
+        4. Product Description (detailed, at least 100 words)
+        5. Sample Customer Reviews (3-5 if available)
+        6. Common Questions and Answers about the product (2-3 if available)
+
+        For any information you can't find with high confidence, indicate "Not Found" rather than guessing.
+        Format your response as a valid JSON object with these keys: title, brand, bullets (array), description, reviews_raw (array), qna_raw (array).
+
+        Ensure the JSON is properly formatted and valid. For reviews_raw and qna_raw, include full text entries, not summaries.
+        """
+
+        # Call OpenAI with JSON response format
+        extraction_response = call_openai_api(
+            prompt=extraction_prompt,
+            model=GPT_MODEL,
+            temperature=0.3,
+            response_format={"type": "json_object"}
+        )
+
+        # Parse the response
+        extracted_data = json.loads(extraction_response)
+
+        # Step 3: Update our details with any new information found
+        for key, value in extracted_data.items():
+            if key in details:
+                # Only update if we don't have the data or it's a placeholder
+                if details[key] == "Not Found" or (isinstance(details[key], list) and not details[key]):
+                    details[key] = value
+                # For text fields, prefer longer, more detailed content
+                elif isinstance(value, str) and len(value) > len(details[key]) and details[key] != "Not Found":
+                    details[key] = value
+
+        logger.info("Enhanced web search fallback successful")
+        return details
+
+    except Exception as e:
+        logger.error(f"Enhanced web search fallback failed: {e}")
+        # If the enhanced method fails, try a simpler approach
+        try:
+            simple_prompt = f"""
+            I need information about this product: {query}
+
+            Please provide the following details in a structured format:
+            1. Product Title
+            2. Brand Name
+            3. Key Features (list format)
+            4. Product Description
+            5. Sample Customer Reviews (if available)
+            6. Common Questions and Answers (if available)
+
+            Format as JSON with these keys: title, brand, bullets (array), description, reviews_raw (array), qna_raw (array).
+            """
+
+            simple_response = call_openai_api(
+                prompt=simple_prompt,
+                model=GPT_MODEL,
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
+
+            simple_data = json.loads(simple_response)
+
+            # Update our details with any new information found
+            for key, value in simple_data.items():
+                if key in details and (details[key] == "Not Found" or not details[key]):
+                    details[key] = value
+
+            logger.info("Simple fallback successful after enhanced method failed")
+        except Exception as simple_e:
+            logger.error(f"Simple fallback also failed: {simple_e}")
+
+        return details
 
 async def scrape_amazon_listing_details(url: str) -> dict:
     logger.info(f"Attempting to scrape Amazon listing: {url}")
@@ -231,7 +435,7 @@ async def scrape_amazon_listing_details(url: str) -> dict:
             await browser.close()
             CACHE[url] = details
             logger.info("Amazon scraping successful with Playwright.")
-            return details
+            
     except Exception as e:
         logger.error(f"Error during Playwright Amazon scraping for {url}: {e}. Falling back to requests method.")
         try:
@@ -257,11 +461,34 @@ async def scrape_amazon_listing_details(url: str) -> dict:
                 logger.info("Amazon scraping successful with fallback requests method.")
             else:
                 logger.warning(f"Fallback requests method failed with status code {response.status_code} for {url}.")
-            CACHE[url] = details
-            return details
         except Exception as req_e:
             logger.error(f"Error during fallback requests scraping for {url}: {req_e}")
-            return details
+    
+    # Check if we got meaningful data
+    if (details["title"] == "Not Found" or not details["bullets"]) and url:
+        try:
+            # Extract product name from URL for better search
+            product_query = url.split("/")[-1].replace("-", " ")
+            if len(product_query) < 5:  # If URL parsing didn't yield good results
+                product_query = url  # Use full URL
+
+            logger.info(f"Amazon scraping failed or incomplete, using enhanced web search fallback for: {product_query}")
+            fallback_details = await enhanced_Web_Search_fallback(product_query, details)
+
+            # Update our details with fallback data
+            for key, value in fallback_details.items():
+                if (details[key] == "Not Found" or not details[key]) and value:
+                    details[key] = value
+                # For lists, merge if both have content
+                elif isinstance(value, list) and isinstance(details[key], list) and value and details[key]:
+                    details[key] = list(set(details[key] + value))  # Remove duplicates
+
+            logger.info("Enhanced fallback data successfully merged with partial scraping results")
+        except Exception as fallback_err:
+            logger.error(f"Enhanced web search fallback failed: {fallback_err}")
+    
+    CACHE[url] = details
+    return details
 
 # --- GPT UTILITY FUNCTIONS ---
 @retry(
@@ -397,6 +624,10 @@ def generate_creative_brief(inputs: dict, website_data: str, amazon_details: dic
     amazon_bullets_str = "\n- ".join(amazon_details.get("bullets", []))
     amazon_bullets_str = "- " + amazon_bullets_str if amazon_bullets_str else "N/A"
     amazon_description = amazon_details.get("description", "N/A")
+    
+    # Extract reviews and Q&A for deeper analysis
+    amazon_reviews = "\n".join(amazon_details.get("reviews_raw", []))
+    amazon_qna = "\n".join(amazon_details.get("qna_raw", []))
 
     website_section = f"### Scraped Website Content (Supplementary - Use only if needed):\n{website_data[:2000]}..." if website_data else "### Scraped Website Content (Supplementary - Use only if needed):\nNo website URL provided or scraping failed."
     guideline_section = f"*Brand Guideline File Uploaded:* {os.path.basename(brand_guideline_file_path)}" if brand_guideline_file_path else ""
@@ -480,117 +711,215 @@ def generate_creative_brief(inputs: dict, website_data: str, amazon_details: dic
     )
 
     prompt = f"""
-    You are an expert Amazon strategist and copywriter generating a Creative Brief JSON.
+    You are an expert Amazon strategist and copywriter generating a Creative Brief JSON for a high-value client. Your brief will guide the entire creative and marketing strategy for their Amazon product listing.
 
-**Primary Data Source:** Scraped Amazon Listing Data provided below.
-**Secondary Data Source:** User Provided Input (confirm details, fill gaps).
-**Tertiary Data Source:** Scraped Website Content (supplementary context only).
+**PRIMARY DATA SOURCES (In order of priority):**
+1. Scraped Amazon Listing Data (Title, Brand, Bullets, Description, Reviews, Q&A)
+2. User Provided Input (Brand details, product category, challenges)
+3. Scraped Website Content (supplementary context only)
+4. Web search data (if scraping methods failed)
+
+**MASTER CREATIVE BRIEF FRAMEWORK:**
 
 **CRITICAL INSTRUCTIONS:**
-1. Generate the **complete** Creative Brief in the specified JSON format.
-2. Answer **ALL** questions thoroughly with detailed, product-related content.
-3. Derive answers **PRIMARILY** from the "Scraped Amazon Listing Data". Use the Title, Brand, Bullets, Description, and Customer Insights (VOC).
-4. Use "User Provided Input" to confirm information (like brand name, product category) or fill details not explicitly on the Amazon page (like specific competitors, detailed brand story).
-5. Use "Scraped Website Content" **only** if information is missing from both Amazon and User Input.
-6. **DO NOT LEAVE ANSWERS BLANK.** If information isn't directly stated in the Amazon data or other sources, **infer logically** based on any available context (e.g., product title, category, or general user input). If minimal data is available, **generate detailed content** related to the product by making educated assumptions and clearly state these as suggestions (e.g., "Suggested Target Audience based on product type: [Detailed description]. Further research recommended."). Provide actionable insights and creative suggestions to fill all fields comprehensively.
-7. Ensure all responses are **detailed and specific**, avoiding generic or vague answers. For each section, elaborate on how the information or suggestion ties to the product or brand strategy on Amazon.
-8. Output **ONLY** the valid JSON structure. No introductory text, comments, or markdown formatting outside the JSON values.
-9. Use all available resources to triangulate accurate, nuanced, and brand-aligned data. Prioritize consistency with brand language and tone. Cross-reference between assets to resolve ambiguity. Extract directly from structured sections. If conflicts occur, default to the latest listing or website over other sources.
+1. Generate a **comprehensive, strategic Creative Brief** in the specified JSON format that will serve as the foundation for a complete Amazon listing overhaul.
+2. Answer **ALL questions** with detailed, product-specific content that demonstrates deep market understanding.
+3. Derive answers **PRIMARILY** from the "Scraped Amazon Listing Data" - especially customer reviews and Q&A which contain critical VOC (Voice of Customer) insights.
+4. Use "User Provided Input" to confirm information or fill gaps not found on Amazon.
+5. Use "Scraped Website Content" only when information is missing from both Amazon and User Input.
+6. **NEVER LEAVE ANSWERS BLANK OR GENERIC.** If information isn't explicitly stated, make strategic inferences based on:
+   - Product category norms and best practices
+   - Competitive landscape analysis
+   - Customer language patterns in reviews/Q&A
+   - Amazon marketplace trends
+   
+   Always clearly label inferences as "Strategic recommendation based on [specific insight]" so the client knows what's data-driven vs. strategic guidance.
 
-**ENHANCED DATA EXTRACTION GUIDANCE:**
+7. **FOCUS ON ACTIONABLE INSIGHTS** that directly impact conversion rate and discoverability:
+   - Use specific customer language from reviews in your recommendations
+   - Identify precise pain points that block purchase
+   - Suggest concrete messaging approaches, not vague platitudes
+   - Recommend specific visual elements that would enhance the listing
+
+8. **MAINTAIN STRATEGIC CONSISTENCY** across all sections - ensure your target audience, tone, USPs, and selling points align with each other.
+
+9. **IDENTIFY WEB SEARCH DATA** in the "FINAL NOTES & STRATEGIC CALLOUTS" section with:
+   "Note: Some product information was obtained through AI-assisted web search due to scraping limitations. The following sections contain data from web search that should be verified with the client: [List specific sections]"
+
+**ADVANCED STRATEGIC ANALYSIS FRAMEWORK:**
 
 **For PRODUCT SNAPSHOT:**
-- Clearly define what the product is, focusing on factual attributes.
-- Explain how it works using specific technical details from Amazon bullets and description.
-- Identify the primary customer problem it solves by analyzing negative reviews of competitors.
-- Define the target audience based on demographic and psychographic indicators in reviews and Q&A.
+- Define the product with precision, focusing on its core function and category placement
+- Explain its operation using technical details from bullets/description, emphasizing unique mechanisms
+- Identify the primary customer problem by analyzing negative competitor reviews and "pain point" language in positive reviews
+- Define the target audience using demographic and psychographic indicators from review language patterns
 
 **For CURRENT LISTING CHALLENGES:**
-- Analyze the current listing for conversion barriers, unclear messaging, or missed opportunities.
-- Look for patterns in lower-star reviews that might indicate listing weaknesses.
-- Identify where the listing may be losing attention based on competitor comparison.
+- Analyze the current listing for specific conversion barriers:
+  * Missing information (common questions in Q&A indicate gaps)
+  * Unclear value proposition (reviews expressing surprise at features suggest poor communication)
+  * Weak imagery (comments about "looks different than expected")
+  * Price justification issues (reviews mentioning value or comparisons)
+  * Trust barriers (reviews mentioning hesitation before purchase)
+- Identify specific attention-losing elements by comparing to category best practices
 
 **For TARGET CUSTOMER DEEP DIVE:**
-- Extract demographic details: Gender Identity (Male, Female, Both, Others), Age Range (Infants to Senior Citizens), Income Segment (Budget-Conscious to Affluent), Geographic Focus, Generation.
-- Identify psychographics: Life Stage or Identity (School-Age Children, College Students, Working Professionals, Parents, etc.), Buying Behavior (Impulse Buyer, Research-Driven, Repeat Buyer, etc.).
-- Extract from Amazon reviews, Q&A, Instagram engagement, influencer collaborations, website content.
-- Look for self-revealing buyer details in verified reviews, situational phrases in Q&A, visual cues in social media.
-- Analyze pain points from negative competitor reviews and "Will this help with..." questions.
-- Understand shopping behavior by analyzing review language and question patterns.
+- Extract demographic details from review language patterns:
+  * Gender identity markers in language
+  * Age indicators (references to life stage, technology comfort, etc.)
+  * Income signals (price sensitivity comments, luxury expectations)
+  * Professional context mentions
+- Identify psychographic segments based on:
+  * Value expressions in reviews ("I care about sustainability")
+  * Lifestyle references ("perfect for my morning routine")
+  * Purchase motivation patterns ("needed something for...")
+- Map Amazon shopping behavior based on:
+  * Decision factors mentioned in reviews
+  * Questions asked before purchase
+  * Comparison shopping references
 
 **For BARRIERS TO PURCHASE:**
-- Identify common doubts from Amazon Q&A sections.
-- Extract hesitations from 3-star reviews (balanced feedback often reveals key concerns).
-- Look for repeated questions about specific features, durability, or compatibility.
-- Analyze competitor reviews for pain points your product solves.
+- Extract specific doubts from:
+  * Questions in Q&A section (especially repeated questions)
+  * "Almost didn't buy because..." statements in reviews
+  * Negative reviews of competitors in same category
+  * Hesitations mentioned in positive reviews ("was worried about X but...")
+- Categorize barriers as:
+  * Product understanding gaps
+  * Quality/durability concerns
+  * Compatibility/fit uncertainties
+  * Value justification needs
+  * Social proof requirements
 
 **For BRAND VOICE & TONE:**
-- Analyze how the brand speaks across touchpoints (Amazon bullets, website, social).
-- Identify patterns: Is it witty? Data-backed? Luxe and polished?
-- Look for voice cues: contractions, scientific language, persuasive commands, humor.
-- Select from: Friendly & Conversational, Bold & Confident, Quirky & Fun, Calm & Minimal, Scientific & Informative, Premium & Sophisticated, Empowering, Playful & Kid-Friendly.
-- Note signature phrases, terminology, or linguistic patterns used consistently.
+- Analyze existing brand language across:
+  * Amazon bullet structure and syntax patterns
+  * Description paragraph style and sentence construction
+  * Website messaging approach
+  * Social media voice if available
+- Identify specific language patterns:
+  * Sentence length and complexity
+  * Technical vs. conversational balance
+  * Emotional vs. rational appeals
+  * Use of humor, questions, commands
+  * Formality level and jargon density
+- Recommend specific voice characteristics with examples
 
 **For USPs (UNIQUE SELLING PROPOSITIONS):**
-- Identify market-facing differentiators that answer "Why should someone buy this product over others?"
-- Look for rare features, proven benefits, customer pain points fixed, or market gaps filled.
-- Extract from website bold sections, Amazon bullet points that competitors don't mention, and customer reviews.
-- USPs are often a combination of: a rare feature, a proven benefit, a customer pain point it fixes, a market gap it fills.
-- Eliminate generic fluff like "premium," "high quality," "great value."
-- Make USPs competitor-aware: Would this stand out in a side-by-side chart?
+- Identify true differentiators by analyzing:
+  * Features mentioned most positively in reviews
+  * Comparison statements to other products
+  * "The reason I chose this..." statements
+  * Repeated praise patterns across multiple reviews
+- Structure USPs as problem/solution pairs
+- Validate USPs against competitor offerings
+- Prioritize USPs based on review frequency and emotional intensity
 
 **For 5-SECOND WOW FACTOR:**
-- Identify the "mic-drop moment" - the hook that turns scrollers into shoppers.
-- Extract from: A striking product feature/claim, bold design/packaging, or a powerful stat.
-- Keep it short, powerful, and visual if possible.
-- Maximum 20 words.
+- Extract the most emotionally impactful feature from:
+  * "I was amazed by..." statements in reviews
+  * Exclamation-heavy comments
+  * Features that solved long-standing customer problems
+  * Unexpected benefits mentioned with surprise
+- Craft a concise, high-impact statement that combines:
+  * The key differentiator
+  * The emotional benefit
+  * A visual element when possible
 
-**For KEY FEATURES:**
-- Extract features that describe what the product is made of, how it's built, or what it physically does.
-- Focus on factual attributes like materials, construction, technology - not benefits or outcomes.
-- Look for nouns and adjectives in Amazon bullet points that describe construction, materials, technology.
-- Clean the data by avoiding repetition and merging similar descriptions.
-- Format as 3-4 crisp bullet points with a 1-liner explanation per bullet.
-- Connect each feature to buyer lifestyle or values to show relevance.
+**For KEY FEATURES (WITH CONTEXT):**
+- Extract 4-6 most substantive features from:
+  * Amazon bullets (focusing on specifications, materials, dimensions)
+  * Technical details in description
+  * Features mentioned positively in multiple reviews
+- For each feature, connect to:
+  * A specific customer problem it solves
+  * A lifestyle integration point
+  * An emotional benefit
+- Format as feature → context → benefit chains
 
 **For TOP 6 SELLING POINTS:**
-- Identify 3-6 strongest product truths that justify purchase.
-- Extract from: Amazon listing assets, brand guide, product website, customer reviews, competitor shortcomings.
-- Consider: Unique Features, Product Innovation, Innovative Design, Versatile Uses, Exceptional Performance, Compact & Portable, Safety & Reliability, Customer Reviews, Quality Materials, Ingredients, Clinical Backing, Brand Credibility, Value for Money, Ease of Use, Sustainable Practices, Made in USA, Kid-Friendly, Trusted by Professionals, Long-Lasting/Durability, Award-Winning, Women-Owned.
-- Justify each point with evidence using the 3-anchor framework: Customer Review Insight, Product Attribute, Competitive Differentiator.
-- Be descriptive, not salesy - show what it does and why that matters.
+- Identify the strongest conversion drivers by analyzing:
+  * Most frequently mentioned positive attributes in reviews
+  * Features that drove purchase decisions
+  * Benefits that exceeded customer expectations
+  * Points of differentiation from competitors
+- For each selling point, provide:
+  * The concrete claim/feature
+  * Evidence from customer feedback
+  * Strategic relevance to target audience
+  * Competitive advantage context
 
 **For COMPETITIVE LANDSCAPE:**
-- Identify competitors that are visually or functionally similar, in the same Amazon category, or frequently mentioned.
-- Look for brand name drops in reviews: "I switched from X," "This is better than Y."
-- Avoid resellers, drop-shippers, aggregator-run listings, or brands from different niches.
-- Compare on form, price point, use case, or packaging.
-- Identify Amazon-specific advantages your product has over competitors.
+- Identify direct competitors through:
+  * Brand comparisons in reviews ("better than X")
+  * "Also considered..." statements
+  * Same-category bestsellers
+- Compare on specific dimensions:
+  * Price positioning
+  * Feature set overlap and gaps
+  * Quality perception
+  * Target audience alignment
+- Highlight Amazon-specific advantages:
+  * Prime eligibility impact
+  * Bundle opportunities
+  * Review volume/rating advantages
+  * Search ranking potential
 
 **For SEARCH & KEYWORDS STRATEGY:**
-- Extract high-intent search terms from Amazon autocomplete.
-- Analyze top converting keywords if available from analytics.
-- Look for niche-specific terminology in customer reviews and Q&A.
-- Identify long-tail variations that match user intent.
+- Extract high-conversion search terms from:
+  * Product category terminology in reviews
+  * Problem statements in customer language
+  * Specific feature descriptions in customer words
+  * Use case scenarios mentioned in reviews
+- Identify long-tail opportunities based on:
+  * Specific questions in Q&A
+  * Niche use cases mentioned in reviews
+  * Problem-specific language patterns
+- Organize keywords by:
+  * Purchase intent level
+  * Specificity to product
+  * Competition level
+  * Relevance to target audience
 
 **For BRAND STORY, VALUES & PURPOSE:**
-- Structure brand story as: Why the brand started, what it believes in, how it evolved.
-- Extract from: Website About Page, press mentions, founder interviews, Instagram captions.
-- For founder story, follow format: Origin trigger → A-ha moment → Promise to the customer.
-- For values, select from: Sustainability, Innovation, Wellness, Transparency, Inclusivity, Quality, Empowerment, Community, Other.
-- Ensure each value is backed by visible proof or initiative.
+- Construct a compelling narrative using:
+  * Origin elements from website/about page
+  * Value statements in product description
+  * Mission-focused language in marketing materials
+  * Customer perception of brand in reviews
+- Structure as:
+  * Founding problem/insight
+  * Brand solution approach
+  * Customer-centered promise
+  * Emotional connection point
+- Identify core values based on:
+  * Repeated themes in brand communication
+  * Customer appreciation points in reviews
+  * Differentiation elements from competitors
 
 **For DESIGN DIRECTION:**
-- Analyze layout, color use, image framing, copy tone of reference designs.
-- Categorize as: Clean/minimal, Editorial & Bold, Kid-friendly, Visual First, Lifestyle Heavy.
-- Provide specific visual do's (colors, layouts, text hierarchy, icon styles) and don'ts.
-- Identify packshots, lifestyle imagery, icons/logos/fonts/brand colors needed.
+- Analyze current visual approach for:
+  * Color palette consistency
+  * Typography style and hierarchy
+  * Image composition patterns
+  * Graphic element usage
+- Recommend specific improvements to:
+  * Hero image composition
+  * Infographic clarity
+  * Lifestyle image authenticity
+  * Mobile optimization
+  * A+ content structure
+- Provide specific visual do's and don'ts
 
 **For FINAL NOTES & STRATEGIC CALLOUTS:**
-- Include any additional insights not covered in previous sections.
-- Consider packaging or compliance considerations, customer education needs, cross-sell potential.
-- Highlight social proof or influencer angles if relevant.
-- Note any data insights from analytics if available.
+- Highlight critical implementation considerations:
+  * Compliance requirements specific to category
+  * Technical limitations of Amazon platform
+  * Seasonal/timing strategic opportunities
+  * Cross-sell/bundle potential with specific products
+  * Review generation strategy recommendations
+- Note any data sources that require verification
+- Suggest next steps for implementation prioritization
 
 ---
 ### Scraped Amazon Listing Data (PRIMARY SOURCE):
@@ -600,7 +929,11 @@ def generate_creative_brief(inputs: dict, website_data: str, amazon_details: dic
 {amazon_bullets_str}
 **Product Description:**
 {amazon_description[:2500]}...
-**Customer Insights (VOC from Reviews/Q&A):**
+**Customer Reviews:**
+{amazon_reviews[:1500]}...
+**Customer Q&A:**
+{amazon_qna[:1500]}...
+**Customer Insights (VOC Analysis):**
 {voc_insights}
 ---
 ### User Provided Input (Secondary Source):
@@ -612,7 +945,10 @@ def generate_creative_brief(inputs: dict, website_data: str, amazon_details: dic
 
 **JSON Structure to Generate:**
 {json_structure}
-    Generate the JSON output now:
+
+Your task is to generate a comprehensive, strategic Creative Brief that will transform this Amazon listing. Focus on extracting deep customer insights from reviews and Q&A, identifying true differentiators, and providing actionable guidance that directly impacts conversion. Every section should contain specific, detailed recommendations based on data when available or strategic expertise when data is limited.
+
+Generate the JSON output now:
     """
     try:
         return call_openai_api(prompt, response_format={"type": "json_object"})
