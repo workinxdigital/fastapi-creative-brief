@@ -437,8 +437,8 @@ async def enhanced_Web_Search_fallback(query: str, product_info: dict = None, am
         return details
 async def scrape_amazon_listing_details(url: str) -> dict:
     """
-    Scrapes product details from an Amazon listing URL.
-    Falls back to web search if scraping fails or returns incomplete data.
+    Scrapes product details from an Amazon listing URL using web search.
+    Uses OpenAI's web search capability to extract product information.
 
     Args:
         url: The Amazon product listing URL
@@ -446,7 +446,7 @@ async def scrape_amazon_listing_details(url: str) -> dict:
     Returns:
         dict: Product details including title, brand, bullets, description, reviews, and Q&A
     """
-    logger.info(f"Attempting to scrape Amazon listing: {url}")
+    logger.info(f"Attempting to scrape Amazon listing via web search: {url}")
 
     # Initialize empty product details structure
     details = {
@@ -463,180 +463,209 @@ async def scrape_amazon_listing_details(url: str) -> dict:
         logger.info(f"Using cached data for Amazon URL: {url}")
         return CACHE[url]
 
-    # Primary scraping method using Playwright
+    # Extract ASIN from URL if possible
+    asin = None
+    if "/dp/" in url:
+        asin_match = re.search(r'/dp/([A-Z0-9]{10})', url)
+        if asin_match:
+            asin = asin_match.group(1)
+
+    if not asin and "/product/" in url:
+        asin_match = re.search(r'/product/([A-Z0-9]{10})', url)
+        if asin_match:
+            asin = asin_match.group(1)
+
+    if not asin:
+        # Try to find any 10-character alphanumeric string that might be an ASIN
+        asin_match = re.search(r'([B][0-9A-Z]{9})', url)
+        if asin_match:
+            asin = asin_match.group(1)
+
+    logger.info(f"Extracted ASIN: {asin if asin else 'None'}")
+
+    # Prepare for web search
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
+        # Step 1: Search for basic product information
+        basic_info_query = f"{url} product details title brand features description"
 
-            # Set user agent to avoid detection
-            await page.set_extra_http_headers({
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-            })
+        payload = {
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "system", "content": "You are a helpful web search assistant."},
+                {"role": "user", "content": f"Search for: {basic_info_query}"}
+            ],
+            "tools": [{"type": "Web Search"}],
+            "tool_choice": {"type": "Web Search"}
+        }
 
-            # Navigate to the page with timeout
-            await page.goto(url, timeout=60000)
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload
+        )
 
-            try:
-                # Wait for content to load
-                await page.wait_for_load_state("networkidle", timeout=40000)
-                logger.info("Network idle state reached.")
-            except Exception as timeout_err:
-                logger.warning(f"Network idle timeout exceeded for {url}: {timeout_err}. Proceeding with available content.")
+        basic_info_results = ""
+        if response.status_code == 200:
+            response_data = response.json()
+            tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+            if tool_calls:
+                search_result = tool_calls[0]["function"].get("arguments", "{}")
+                basic_info_results = json.loads(search_result).get("search_results", "")
+                logger.info("Successfully retrieved basic product information")
 
-            # Scroll to load dynamic content
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await asyncio.sleep(3)
+        # Step 2: Search for reviews
+        reviews_query = f"{url} customer reviews"
 
-            # Get page content and parse with BeautifulSoup
-            content = await page.content()
-            soup = BeautifulSoup(content, 'html.parser')
+        payload["messages"][1]["content"] = f"Search for: {reviews_query}"
 
-            # Extract product title
-            title_element = soup.select_one('#productTitle')
-            if title_element:
-                details['title'] = title_element.get_text(strip=True)
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload
+        )
 
-            # Extract brand
-            brand_element = soup.select_one('#bylineInfo') or soup.select_one('a#brand')
-            if brand_element:
-                details['brand'] = brand_element.get_text(strip=True).replace('Visit the ', '').replace(' Store', '').replace('Brand: ', '')
+        reviews_results = ""
+        if response.status_code == 200:
+            response_data = response.json()
+            tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+            if tool_calls:
+                search_result = tool_calls[0]["function"].get("arguments", "{}")
+                reviews_results = json.loads(search_result).get("search_results", "")
+                logger.info("Successfully retrieved product reviews")
 
-            # Extract bullet points
-            bullet_elements = soup.select('#feature-bullets .a-list-item')
-            details['bullets'] = [li.get_text(strip=True) for li in bullet_elements if li.get_text(strip=True)]
+        # Step 3: Search for Q&A
+        qna_query = f"{url} questions and answers FAQ"
 
-            # Extract description
-            desc_element = soup.select_one('#productDescription')
-            if desc_element:
-                details['description'] = desc_element.get_text(strip=True)
+        payload["messages"][1]["content"] = f"Search for: {qna_query}"
 
-            # Extract reviews
-            review_elements = soup.select('div[data-hook="review-collapsed"] span, .review-text-content span')[:15]
-            details['reviews_raw'] = [review.get_text(strip=True) for review in review_elements if review.get_text(strip=True)]
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload
+        )
 
-            # Extract Q&A
-            qna_blocks = soup.select('#ask_lazy_load_div .a-fixed-left-grid-inner, div[data-cel-widget^="ask-"]')[:10]
-            for block in qna_blocks:
-                question_elem = block.select_one('a.a-link-normal[href*="ask/questions/"], .a-declarative .a-link-normal span')
-                answer_elem = block.select_one('.a-col-right .a-row span, span[class*="ask-answer-"]')
-                if question_elem and answer_elem:
-                    q = question_elem.get_text(strip=True)
-                    a = answer_elem.get_text(strip=True)
-                    if q and a:
-                        details['qna_raw'].append(f"Q: {q} A: {a}")
+        qna_results = ""
+        if response.status_code == 200:
+            response_data = response.json()
+            tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+            if tool_calls:
+                search_result = tool_calls[0]["function"].get("arguments", "{}")
+                qna_results = json.loads(search_result).get("search_results", "")
+                logger.info("Successfully retrieved product Q&A")
 
-            await browser.close()
-            logger.info("Amazon scraping successful with Playwright.")
+        # Step 4: Process all search results with GPT-4 to extract structured information
+        combined_search_results = f"""
+        BASIC PRODUCT INFORMATION:
+        {basic_info_results}
+
+        CUSTOMER REVIEWS:
+        {reviews_results}
+
+        QUESTIONS AND ANSWERS:
+        {qna_results}
+        """
+
+        extraction_prompt = f"""
+        Based on the following web search results about an Amazon product, extract structured information in the requested format.
+
+        Amazon Product URL: {url}
+        {f"Amazon ASIN: {asin}" if asin else ""}
+
+        WEB SEARCH RESULTS:
+        {combined_search_results}
+
+        Extract the following information:
+        1. Product Title (full and accurate)
+        2. Brand Name
+        3. Key Features/Bullet Points (list at least 5 if available)
+        4. Product Description (detailed, at least 100 words)
+        5. Sample Customer Reviews (3-5 if available)
+        6. Common Questions and Answers about the product (2-3 if available)
+
+        For any information you can't find with high confidence, indicate "Not Found" rather than guessing.
+        Format your response as a valid JSON object with these keys: title, brand, bullets (array), description, reviews_raw (array), qna_raw (array).
+
+        Ensure the JSON is properly formatted and valid. For reviews_raw and qna_raw, include full text entries, not summaries.
+        """
+
+        # Call OpenAI with JSON response format
+        extraction_response = call_openai_api(
+            prompt=extraction_prompt,
+            model=GPT_MODEL,
+            temperature=0.3,
+            response_format={"type": "json_object"}
+        )
+
+        # Parse the response
+        extracted_data = json.loads(extraction_response)
+
+        # Update our details with the extracted data
+        for key, value in extracted_data.items():
+            if key in details:
+                details[key] = value
+
+        logger.info("Successfully extracted structured product information from web search results")
+
+        # Cache the results
+        CACHE[url] = details
+        return details
 
     except Exception as e:
-        logger.error(f"Error during Playwright Amazon scraping for {url}: {e}. Falling back to requests method.")
+        logger.error(f"Error during web search-based Amazon scraping for {url}: {e}")
 
-        # Fallback scraping method using requests
+        # Try a simpler fallback approach if the main method fails
         try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Connection": "keep-alive",
-                "Upgrade-Insecure-Requests": "1"
-            }
+            logger.info(f"Attempting simplified web search fallback for {url}")
 
-            response = requests.get(url, headers=headers, timeout=15)
-
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-
-                # Extract basic product information
-                title_element = soup.select_one('#productTitle')
-                if title_element:
-                    details['title'] = title_element.get_text(strip=True)
-
-                brand_element = soup.select_one('#bylineInfo') or soup.select_one('a#brand')
-                if brand_element:
-                    details['brand'] = brand_element.get_text(strip=True).replace('Visit the ', '').replace(' Store', '').replace('Brand: ', '')
-
-                bullet_elements = soup.select('#feature-bullets .a-list-item')
-                details['bullets'] = [li.get_text(strip=True) for li in bullet_elements if li.get_text(strip=True)]
-
-                desc_element = soup.select_one('#productDescription')
-                if desc_element:
-                    details['description'] = desc_element.get_text(strip=True)
-
-                logger.info("Amazon scraping successful with fallback requests method.")
+            # Create a simpler query from the URL
+            product_name = url.split("/")[-1].replace("-", " ").replace(".html", "")
+            if asin:
+                simple_query = f"Amazon product {asin} {product_name} details"
             else:
-                logger.warning(f"Fallback requests method failed with status code {response.status_code} for {url}.")
+                simple_query = f"Amazon product {product_name} details"
 
-        except Exception as req_e:
-            logger.error(f"Error during fallback requests scraping for {url}: {req_e}")
+            simple_prompt = f"""
+            I need information about this Amazon product: {simple_query}
+            URL: {url}
 
-    # Check if we need to use web search fallback
-    is_data_incomplete = (
-        details["title"] == "Not Found" or
-        details["brand"] == "Not Found" or
-        not details["bullets"] or
-        details["description"] == "Not Found" or
-        not details["reviews_raw"]
-    )
+            Please provide the following details in a structured format:
+            1. Product Title
+            2. Brand Name
+            3. Key Features (list format)
+            4. Product Description
+            5. Sample Customer Reviews (if available)
+            6. Common Questions and Answers (if available)
 
-    if is_data_incomplete and url:
-        try:
-            # Extract product name from URL for better search
-            product_parts = url.split("/")
-            product_query = ""
+            Format as JSON with these keys: title, brand, bullets (array), description, reviews_raw (array), qna_raw (array).
+            """
 
-            # Look for the product ID or name in the URL
-            for part in product_parts:
-                if part.startswith("B0") and len(part) >= 10:  # Likely an ASIN
-                    product_query = part
-                    break
-
-            if not product_query:
-                # Try to extract from the product name in URL
-                for part in product_parts:
-                    if len(part) > 5 and "-" in part:
-                        product_query = part.replace("-", " ")
-                        break
-
-            # If we still don't have a good query, use the domain and some URL parts
-            if not product_query or len(product_query) < 5:
-                product_query = url
-
-            logger.info(f"Amazon scraping incomplete, using enhanced web search fallback for: {product_query}")
-
-            # Call the enhanced web search fallback with the Amazon URL
-            fallback_details = await enhanced_Web_Search_fallback(
-                query=product_query,
-                product_info=details,
-                amazon_url=url
+            simple_response = call_openai_api(
+                prompt=simple_prompt,
+                model=GPT_MODEL,
+                temperature=0.3,
+                response_format={"type": "json_object"}
             )
 
-            # Merge the fallback data with our existing details
-            for key, value in fallback_details.items():
-                # Only update if the current value is empty or placeholder
+            simple_data = json.loads(simple_response)
+
+            # Update our details with the simplified data
+            for key, value in simple_data.items():
                 if key in details:
-                    if details[key] == "Not Found" or (isinstance(details[key], list) and not details[key]):
-                        details[key] = value
-                    # For text fields, prefer longer content if current is minimal
-                    elif isinstance(value, str) and isinstance(details[key], str):
-                        if len(details[key]) < 50 and len(value) > len(details[key]):
-                            details[key] = value
-                    # For lists, combine unique items
-                    elif isinstance(value, list) and isinstance(details[key], list):
-                        # Add new items that aren't already present
-                        for item in value:
-                            if item not in details[key]:
-                                details[key].append(item)
+                    details[key] = value
 
-            logger.info("Enhanced fallback data successfully merged with partial scraping results")
+            logger.info("Simplified web search fallback successful")
 
-        except Exception as fallback_err:
-            logger.error(f"Enhanced web search fallback failed: {fallback_err}")
+        except Exception as simple_e:
+            logger.error(f"Simplified web search fallback also failed: {simple_e}")
 
-    # Cache the results
-    CACHE[url] = details
-    return details
+        # Cache whatever we have
+        CACHE[url] = details
+        return details
 # --- GPT UTILITY FUNCTIONS ---
 @retry(
     stop=stop_after_attempt(MAX_RETRIES),
