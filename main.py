@@ -155,7 +155,7 @@ def parse_gpt_output(gpt_output: str) -> dict:
                     return {"editable_sections": data}
         except Exception as inner_e:
             logger.error(f"Failed to extract partial JSON: {inner_e}")
-        return {"editable_sections": [{"title": "Error", "questions": [{"question": "Parsing Failed", "answer": f"GPT output parsing error: {str(e)}"}]}]}
+            return {"editable_sections": [{"title": "Error", "questions": [{"question": "Parsing Failed", "answer": f"GPT output parsing error: {str(e)}"}]}]}
     except Exception as e:
         logger.error(f"Unexpected error parsing GPT output: {e}")
         return {"editable_sections": [{"title": "Error", "questions": [{"question": "Parsing Failed", "answer": f"Unexpected error: {str(e)}"}]}]}
@@ -410,6 +410,75 @@ def generate_creative_brief(inputs: dict, website_data: str, amazon_details: dic
                 user_input_summary_items.append(f"- {k}: {v if v else 'N/A'}")
     user_input_summary = "\n".join(user_input_summary_items)
 
+    # Pre-format the JSON structure to avoid nested f-strings
+    amazon_listing_value = inputs.get('amazon_listing', '')
+    json_structure = (
+        '{"editable_sections": [\n'
+        '    {"title": "PROJECT OVERVIEW", "questions": [\n'
+        '    {"question": "Project Name", "answer": ""},\n'
+        '    {"question": "Brand Name", "answer": ""},\n'
+        '    {"question": "Website", "answer": ""},\n'
+        f'    {{"question": "Amazon Listing (if available)", "answer": "{amazon_listing_value}"}},\n'
+        '    {"question": "Instagram Handle (if applicable)", "answer": ""}\n'
+        '    ]},\n'
+        '    {"title": "PRODUCT SNAPSHOT", "questions": [\n'
+        '    {"question": "What exactly is the product?", "answer": ""},\n'
+        '    {"question": "What does it do and how does it work?", "answer": ""},\n'
+        '    {"question": "What problem does it solve?", "answer": ""},\n'
+        '    {"question": "Who is it meant for?", "answer": ""}\n'
+        '    ]},\n'
+        '    {"title": "CURRENT LISTING CHALLENGES", "questions": [\n'
+        '    {"question": "What\'s broken or underwhelming about the current Amazon listing, brand positioning, or creative execution?", "answer": ""},\n'
+        '    {"question": "Where are they losing conversions or attention?", "answer": ""}\n'
+        '    ]},\n'
+        '    {"title": "TARGET CUSTOMER DEEP DIVE", "questions": [\n'
+        '    {"question": "Gender, age range, location, income, profession", "answer": ""},\n'
+        '    {"question": "Life stage or identity (e.g., new moms, eco-conscious Gen Z, busy professionals)", "answer": ""},\n'
+        '    {"question": "Pain points, desires, motivations", "answer": ""},\n'
+        '    {"question": "How do they shop on Amazon? What do they care about when scrolling?", "answer": ""}\n'
+        '    ]},\n'
+        '    {"title": "BARRIERS TO PURCHASE", "questions": [\n'
+        '    {"question": "List the common doubts, hesitations, or FAQ-style friction points that stop people from buying — even if they like the product.", "answer": ""}\n'
+        '    ]},\n'
+        '    {"title": "BRAND VOICE & TONE", "questions": [\n'
+        '    {"question": "Describe the tone and copywriting style the brand uses or should use (e.g., bold, sassy, informative, premium, conversational).", "answer": ""},\n'
+        '    {"question": "Include any signature words, phrases, or linguistic quirks.", "answer": ""}\n'
+        '    ]},\n'
+        '    {"title": "USPs (UNIQUE SELLING PROPOSITIONS)", "questions": [\n'
+        '    {"question": "What makes this product meaningfully different from other options in the category?", "answer": ""},\n'
+        '    {"question": "Think functional benefits, emotional angles, and cultural relevance.", "answer": ""}\n'
+        '    ]},\n'
+        '    {"title": "5-SECOND WOW FACTOR", "questions": [\n'
+        '    {"question": "If a customer saw this listing for 5 seconds, what single visual hook, copy line, or feature would stop them in their tracks?", "answer": ""}\n'
+        '    ]},\n'
+        '    {"title": "KEY FEATURES (WITH CONTEXT)", "questions": [\n'
+        '    {"question": "List 4–6 major features. But go beyond just the bullet points — explain: Why does this matter to the buyer? How does it connect to their lifestyle or values?", "answer": ""}\n'
+        '    ]},\n'
+        '    {"title": "TOP 6 SELLING POINTS (WITH STRATEGIC JUSTIFICATION)", "questions": [\n'
+        '    {"question": "For each of the client\'s selected selling points: State the point. Explain *why* it\'s strategically powerful for this product and customer.", "answer": ""}\n'
+        '    ]},\n'
+        '    {"title": "COMPETITIVE LANDSCAPE", "questions": [\n'
+        '    {"question": "List 2–3 main competitors", "answer": ""},\n'
+        '    {"question": "Describe how this product compares", "answer": ""},\n'
+        '    {"question": "Mention any Amazon-specific differentiators (e.g. bundle, shipping time, design)", "answer": ""}\n'
+        '    ]},\n'
+        '    {"title": "SEARCH & KEYWORDS STRATEGY", "questions": [\n'
+        '    {"question": "Suggest relevant search terms and niche keywords to target. These should align with user intent, category trends, or long-tail SEO goals.", "answer": ""}\n'
+        '    ]},\n'
+        '    {"title": "BRAND STORY, VALUES & PURPOSE", "questions": [\n'
+        '    {"question": "Give a short but meaningful brand origin story or founder story.", "answer": ""},\n'
+        '    {"question": "Highlight core values, emotional drivers, or the \\"bigger why\\" behind the brand\'s existence.", "answer": ""}\n'
+        '    ]},\n'
+        '    {"title": "DESIGN DIRECTION", "questions": [\n'
+        '    {"question": "Summarize the client\'s aesthetic preferences", "answer": ""},\n'
+        '    {"question": "Suggest how the visuals, layout, or color themes should feel (e.g., clean/minimal, bold/graphic, warm/natural)", "answer": ""}\n'
+        '    ]},\n'
+        '    {"title": "FINAL NOTES & STRATEGIC CALLOUTS", "questions": [\n'
+        '    {"question": "Include any extra insights for the creative team, such as: Packaging or compliance considerations, Customer education needs, Cross-sell or upsell potential, Social proof or influencer angles", "answer": ""}\n'
+        '    ]}\n'
+        ']}'
+    )
+
     prompt = f"""
     You are an expert Amazon strategist and copywriter generating a Creative Brief JSON.
 
@@ -542,70 +611,7 @@ def generate_creative_brief(inputs: dict, website_data: str, amazon_details: dic
 ---
 
 **JSON Structure to Generate:**
-{"editable_sections": [
-    {"title": "PROJECT OVERVIEW", "questions": [
-        {"question": "Project Name", "answer": ""},
-        {"question": "Brand Name", "answer": ""},
-        {"question": "Website", "answer": ""},
-        {"question": "Amazon Listing (if available)", "answer": "{inputs.get('amazon_listing', '')}"},
-        {"question": "Instagram Handle (if applicable)", "answer": ""}
-    ]},
-    {"title": "PRODUCT SNAPSHOT", "questions": [
-        {"question": "What exactly is the product?", "answer": ""},
-        {"question": "What does it do and how does it work?", "answer": ""},
-        {"question": "What problem does it solve?", "answer": ""},
-        {"question": "Who is it meant for?", "answer": ""}
-    ]},
-    {"title": "CURRENT LISTING CHALLENGES", "questions": [
-        {"question": "What's broken or underwhelming about the current Amazon listing, brand positioning, or creative execution?", "answer": ""},
-        {"question": "Where are they losing conversions or attention?", "answer": ""}
-    ]},
-    {"title": "TARGET CUSTOMER DEEP DIVE", "questions": [
-        {"question": "Gender, age range, location, income, profession", "answer": ""},
-        {"question": "Life stage or identity (e.g., new moms, eco-conscious Gen Z, busy professionals)", "answer": ""},
-        {"question": "Pain points, desires, motivations", "answer": ""},
-        {"question": "How do they shop on Amazon? What do they care about when scrolling?", "answer": ""}
-    ]},
-    {"title": "BARRIERS TO PURCHASE", "questions": [
-        {"question": "List the common doubts, hesitations, or FAQ-style friction points that stop people from buying — even if they like the product.", "answer": ""}
-    ]},
-    {"title": "BRAND VOICE & TONE", "questions": [
-        {"question": "Describe the tone and copywriting style the brand uses or should use (e.g., bold, sassy, informative, premium, conversational).", "answer": ""},
-        {"question": "Include any signature words, phrases, or linguistic quirks.", "answer": ""}
-    ]},
-    {"title": "USPs (UNIQUE SELLING PROPOSITIONS)", "questions": [
-        {"question": "What makes this product meaningfully different from other options in the category?", "answer": ""},
-        {"question": "Think functional benefits, emotional angles, and cultural relevance.", "answer": ""}
-    ]},
-    {"title": "5-SECOND WOW FACTOR", "questions": [
-        {"question": "If a customer saw this listing for 5 seconds, what single visual hook, copy line, or feature would stop them in their tracks?", "answer": ""}
-    ]},
-    {"title": "KEY FEATURES (WITH CONTEXT)", "questions": [
-        {"question": "List 4–6 major features. But go beyond just the bullet points — explain: Why does this matter to the buyer? How does it connect to their lifestyle or values?", "answer": ""}
-    ]},
-    {"title": "TOP 6 SELLING POINTS (WITH STRATEGIC JUSTIFICATION)", "questions": [
-        {"question": "For each of the client's selected selling points: State the point. Explain *why* it's strategically powerful for this product and customer.", "answer": ""}
-    ]},
-    {"title": "COMPETITIVE LANDSCAPE", "questions": [
-        {"question": "List 2–3 main competitors", "answer": ""},
-        {"question": "Describe how this product compares", "answer": ""},
-        {"question": "Mention any Amazon-specific differentiators (e.g. bundle, shipping time, design)", "answer": ""}
-    ]},
-    {"title": "SEARCH & KEYWORDS STRATEGY", "questions": [
-        {"question": "Suggest relevant search terms and niche keywords to target. These should align with user intent, category trends, or long-tail SEO goals.", "answer": ""}
-    ]},
-    {"title": "BRAND STORY, VALUES & PURPOSE", "questions": [
-        {"question": "Give a short but meaningful brand origin story or founder story.", "answer": ""},
-        {"question": "Highlight core values, emotional drivers, or the \"bigger why\" behind the brand's existence.", "answer": ""}
-    ]},
-    {"title": "DESIGN DIRECTION", "questions": [
-        {"question": "Summarize the client's aesthetic preferences", "answer": ""},
-        {"question": "Suggest how the visuals, layout, or color themes should feel (e.g., clean/minimal, bold/graphic, warm/natural)", "answer": ""}
-    ]},
-    {"title": "FINAL NOTES & STRATEGIC CALLOUTS", "questions": [
-        {"question": "Include any extra insights for the creative team, such as: Packaging or compliance considerations, Customer education needs, Cross-sell or upsell potential, Social proof or influencer angles", "answer": ""}
-    ]}
-]}
+{json_structure}
     Generate the JSON output now:
     """
     try:
@@ -696,18 +702,18 @@ def upload_to_drive(file_path: str, filename: str):
         try:
             with open(service_account_path, 'r') as f:
                 content = f.read()
-            logger.info(f"Service account file size: {len(content)} bytes")
-            if not content.strip():
-                logger.error("Service account file is empty")
-                return None, None
+                logger.info(f"Service account file size: {len(content)} bytes")
+                if not content.strip():
+                    logger.error("Service account file is empty")
+                    return None, None
 
-            # Try parsing the JSON to see if it's valid
-            try:
-                json_content = json.loads(content)
-                logger.info("Service account JSON is valid")
-            except json.JSONDecodeError as json_err:
-                logger.error(f"Invalid JSON in service account file: {str(json_err)}")
-                return None, None
+                # Try parsing the JSON to see if it's valid
+                try:
+                    json_content = json.loads(content)
+                    logger.info("Service account JSON is valid")
+                except json.JSONDecodeError as json_err:
+                    logger.error(f"Invalid JSON in service account file: {str(json_err)}")
+                    return None, None
         except Exception as file_err:
             logger.error(f"Error reading service account file: {str(file_err)}")
             return None, None
@@ -728,130 +734,6 @@ def upload_to_drive(file_path: str, filename: str):
         }
 
         media = MediaFileUpload(file_path, mimetype=mime_type)
-        file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
-
-        logger.info(f'File ID: {file.get("id")}')
-        logger.info(f'File Link: {file.get("webViewLink")}')
-
-        return file.get('id'), file.get('webViewLink')
-    except Exception as e:
-        logger.error(f"Error uploading to Google Drive: {str(e)}")
-        return None, None
-        # Continue with normal flow
-        creds = service_account.Credentials.from_service_account_file(
-            service_account_path, scopes=SCOPES)
-
-        service = build('drive', 'v3', credentials=creds)
-
-        # Get the mime type based on file extension
-        mime_type = 'application/pdf'  # Use PDF mime type instead of Google Docs
-
-        # Check if folder exists or create it
-        folder_id = None
-        folder_name = "Intake Form"
-
-        # First try to find the folder
-        results = service.files().list(
-            q=f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false",
-            spaces='drive',
-            fields='files(id, name)'
-        ).execute()
-
-        folders = results.get('files', [])
-
-        if folders:
-            # Folder exists, use the first one
-            folder_id = folders[0]['id']
-            logger.info(f"Found existing folder: {folder_name} with ID: {folder_id}")
-        else:
-            # Create a new folder
-            folder_metadata = {
-                'name': folder_name,
-                'mimeType': 'application/vnd.google-apps.folder'
-            }
-            folder = service.files().create(body=folder_metadata, fields='id').execute()
-            folder_id = folder.get('id')
-            logger.info(f"Created new folder: {folder_name} with ID: {folder_id}")
-
-        # Now upload the file to the folder
-        file_metadata = {
-            'name': filename
-        }
-
-        # Only add parent folder if we have a valid folder ID
-        if folder_id:
-            file_metadata['parents'] = [folder_id]
-
-        media = MediaFileUpload(file_path, mimetype=mime_type)
-        file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
-
-        logger.info(f'File ID: {file.get("id")}')
-        logger.info(f'File Link: {file.get("webViewLink")}')
-
-        return file.get('id'), file.get('webViewLink')
-    except Exception as e:
-        logger.error(f"Error uploading to Google Drive: {str(e)}")
-        return None, None
-
-        # Continue with normal flow
-        creds = service_account.Credentials.from_service_account_file(
-            service_account_path, scopes=SCOPES)
-
-        service = build('drive', 'v3', credentials=creds)
-
-        # Get the mime type based on file extension
-        mime_type = 'application/pdf'  # Use PDF mime type instead of Google Docs
-
-        file_metadata = {
-            'name': filename,
-            'parents': [GOOGLE_DRIVE_FOLDER_ID]  # Add to specified folder
-        }
-
-        media = MediaFileUpload(file_path, mimetype=mime_type)
-        file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
-
-        logger.info(f'File ID: {file.get("id")}')
-        logger.info(f'File Link: {file.get("webViewLink")}')
-
-        return file.get('id'), file.get('webViewLink')
-    except Exception as e:
-        logger.error(f"Error uploading to Google Drive: {str(e)}")
-        return None, None
-
-        # Continue with normal flow
-        creds = service_account.Credentials.from_service_account_file(
-            service_account_path, scopes=SCOPES)
-
-        service = build('drive', 'v3', credentials=creds)
-
-        file_metadata = {
-            'name': filename,
-            'mimeType': 'application/vnd.google-apps.document'
-        }
-
-        media = MediaFileUpload(file_path, mimetype='text/plain')
-        file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
-
-        logger.info(f'File ID: {file.get("id")}')
-        logger.info(f'File Link: {file.get("webViewLink")}')
-
-        return file.get('id'), file.get('webViewLink')
-    except Exception as e:
-        logger.error(f"Error uploading to Google Drive: {str(e)}")
-        return None, None
-
-        # Continue with normal flow
-        creds = service_account.Credentials.from_service_account_file(
-            SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-
-        service = build('drive', 'v3', credentials=creds)
-
-        file_metadata = {
-            'name': filename,
-            'mimeType': 'application/vnd.google-apps.document'
-        }
-
-        media = MediaFileUpload(file_path, mimetype='text/plain')
         file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
 
         logger.info(f'File ID: {file.get("id")}')
