@@ -217,10 +217,23 @@ async def scrape_website_text(url: str) -> str:
         except Exception as fallback_err:
             logger.error(f"Enhanced web search fallback for website content failed: {fallback_err}")
             return f"Could not scrape website: {e}. Web search fallback also failed: {fallback_err}"
-async def enhanced_Web_Search_fallback(query: str, product_info: dict = None) -> dict:
+async def enhanced_Web_Search_fallback(query: str, product_info: dict = None, amazon_url: str = None) -> dict:
     """
     Enhanced fallback function that uses a combination of web search and GPT-4
     to gather comprehensive product information when scraping methods fail.
+
+    This implementation:
+    1. Specifically searches for the Amazon listing URL if provided
+    2. Uses targeted queries to gather different aspects of product information
+    3. Synthesizes information into a structured format
+
+    Args:
+        query: Search query about the product
+        product_info: Any partial information already collected
+        amazon_url: The specific Amazon listing URL that failed to scrape properly
+
+    Returns:
+        dict: Completed product information
     """
     logger.info(f"Using enhanced web search fallback for: {query}")
 
@@ -231,42 +244,69 @@ async def enhanced_Web_Search_fallback(query: str, product_info: dict = None) ->
     }
 
     try:
-        # Step 1: Perform initial web search to identify the product
+        # Step 1: Perform targeted searches
         search_results = []
-
-        # Use the Web Search function to get real search results
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
             "Content-Type": "application/json"
         }
 
-        # First search: General product information
-        general_query = f"{query} product details specifications"
-        payload = {
-            "model": "gpt-4o",  # Using the latest model for web search
-            "messages": [
-                {"role": "system", "content": "You are a helpful web search assistant."},
-                {"role": "user", "content": f"Search for: {general_query}"}
-            ],
-            "tools": [{"type": "Web Search"}],
-            "tool_choice": {"type": "Web Search"}
-        }
+        # First search: Direct Amazon URL search if available
+        if amazon_url:
+            logger.info(f"Searching specifically for Amazon listing: {amazon_url}")
+            amazon_specific_query = f"product information from {amazon_url}"
 
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
-            json=payload
-        )
+            payload = {
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": "You are a helpful web search assistant."},
+                    {"role": "user", "content": f"Search for: {amazon_specific_query}"}
+                ],
+                "tools": [{"type": "Web Search"}],
+                "tool_choice": {"type": "Web Search"}
+            }
 
-        if response.status_code == 200:
-            response_data = response.json()
-            tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
-            if tool_calls:
-                search_results.append(tool_calls[0]["function"].get("arguments", "{}"))
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
 
-        # Second search: Reviews and customer feedback
+            if response.status_code == 200:
+                response_data = response.json()
+                tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+                if tool_calls:
+                    search_results.append(tool_calls[0]["function"].get("arguments", "{}"))
+
+        # Second search: General product information if we don't have enough yet
+        if not amazon_url or details["title"] == "Not Found" or not details["bullets"]:
+            general_query = f"{query} product details specifications"
+            payload = {
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": "You are a helpful web search assistant."},
+                    {"role": "user", "content": f"Search for: {general_query}"}
+                ],
+                "tools": [{"type": "Web Search"}],
+                "tool_choice": {"type": "Web Search"}
+            }
+
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
+
+            if response.status_code == 200:
+                response_data = response.json()
+                tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+                if tool_calls:
+                    search_results.append(tool_calls[0]["function"].get("arguments", "{}"))
+
+        # Third search: Reviews and customer feedback
         if details["reviews_raw"] == []:
-            reviews_query = f"{query} product reviews customer feedback"
+            # If we have an Amazon URL, specifically search for reviews of that product
+            reviews_query = f"{amazon_url} customer reviews" if amazon_url else f"{query} product reviews customer feedback"
             payload["messages"][1]["content"] = f"Search for: {reviews_query}"
 
             response = requests.post(
@@ -281,9 +321,10 @@ async def enhanced_Web_Search_fallback(query: str, product_info: dict = None) ->
                 if tool_calls:
                     search_results.append(tool_calls[0]["function"].get("arguments", "{}"))
 
-        # Third search: Q&A and common questions
+        # Fourth search: Q&A and common questions
         if details["qna_raw"] == []:
-            qna_query = f"{query} common questions answers FAQ"
+            # If we have an Amazon URL, specifically search for Q&A of that product
+            qna_query = f"{amazon_url} questions and answers" if amazon_url else f"{query} common questions answers FAQ"
             payload["messages"][1]["content"] = f"Search for: {qna_query}"
 
             response = requests.post(
@@ -301,8 +342,11 @@ async def enhanced_Web_Search_fallback(query: str, product_info: dict = None) ->
         # Step 2: Process search results with GPT-4 to extract structured information
         combined_search_results = "\n\n".join([json.loads(result).get("search_results", "") for result in search_results if result])
 
+        # Include the Amazon URL in the extraction prompt if available
+        amazon_url_context = f"Amazon Product URL: {amazon_url}\n\n" if amazon_url else ""
+
         extraction_prompt = f"""
-        Based on the following web search results about a product, extract structured information in the requested format.
+        {amazon_url_context}Based on the following web search results about a product, extract structured information in the requested format.
 
         WEB SEARCH RESULTS:
         {combined_search_results}
@@ -341,6 +385,12 @@ async def enhanced_Web_Search_fallback(query: str, product_info: dict = None) ->
                 # For text fields, prefer longer, more detailed content
                 elif isinstance(value, str) and len(value) > len(details[key]) and details[key] != "Not Found":
                     details[key] = value
+                # For lists, merge if both have content
+                elif isinstance(value, list) and isinstance(details[key], list) and value and details[key]:
+                    combined = details[key] + value
+                    # Remove duplicates while preserving order
+                    seen = set()
+                    details[key] = [x for x in combined if not (x in seen or seen.add(x))]
 
         logger.info("Enhanced web search fallback successful")
         return details
@@ -349,8 +399,11 @@ async def enhanced_Web_Search_fallback(query: str, product_info: dict = None) ->
         logger.error(f"Enhanced web search fallback failed: {e}")
         # If the enhanced method fails, try a simpler approach
         try:
+            # Include Amazon URL in the simple prompt if available
+            amazon_context = f"from this Amazon listing: {amazon_url}" if amazon_url else ""
+
             simple_prompt = f"""
-            I need information about this product: {query}
+            I need information about this product: {query} {amazon_context}
 
             Please provide the following details in a structured format:
             1. Product Title
@@ -382,46 +435,87 @@ async def enhanced_Web_Search_fallback(query: str, product_info: dict = None) ->
             logger.error(f"Simple fallback also failed: {simple_e}")
 
         return details
-
 async def scrape_amazon_listing_details(url: str) -> dict:
+    """
+    Scrapes product details from an Amazon listing URL.
+    Falls back to web search if scraping fails or returns incomplete data.
+
+    Args:
+        url: The Amazon product listing URL
+
+    Returns:
+        dict: Product details including title, brand, bullets, description, reviews, and Q&A
+    """
     logger.info(f"Attempting to scrape Amazon listing: {url}")
+
+    # Initialize empty product details structure
     details = {
-        "title": "Not Found", "brand": "Not Found", "bullets": [],
-        "description": "Not Found", "reviews_raw": [], "qna_raw": []
+        "title": "Not Found",
+        "brand": "Not Found",
+        "bullets": [],
+        "description": "Not Found",
+        "reviews_raw": [],
+        "qna_raw": []
     }
+
+    # Check cache first
     if url in CACHE:
         logger.info(f"Using cached data for Amazon URL: {url}")
         return CACHE[url]
+
+    # Primary scraping method using Playwright
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
+
+            # Set user agent to avoid detection
+            await page.set_extra_http_headers({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            })
+
+            # Navigate to the page with timeout
             await page.goto(url, timeout=60000)
+
             try:
+                # Wait for content to load
                 await page.wait_for_load_state("networkidle", timeout=40000)
                 logger.info("Network idle state reached.")
             except Exception as timeout_err:
                 logger.warning(f"Network idle timeout exceeded for {url}: {timeout_err}. Proceeding with available content.")
+
+            # Scroll to load dynamic content
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await asyncio.sleep(3)
+
+            # Get page content and parse with BeautifulSoup
             content = await page.content()
             soup = BeautifulSoup(content, 'html.parser')
 
+            # Extract product title
             title_element = soup.select_one('#productTitle')
-            details['title'] = title_element.get_text(strip=True) if title_element else "Title not found"
+            if title_element:
+                details['title'] = title_element.get_text(strip=True)
 
+            # Extract brand
             brand_element = soup.select_one('#bylineInfo') or soup.select_one('a#brand')
-            details['brand'] = brand_element.get_text(strip=True).replace('Visit the ', '').replace(' Store', '').replace('Brand: ', '') if brand_element else "Brand not found"
+            if brand_element:
+                details['brand'] = brand_element.get_text(strip=True).replace('Visit the ', '').replace(' Store', '').replace('Brand: ', '')
 
+            # Extract bullet points
             bullet_elements = soup.select('#feature-bullets .a-list-item')
             details['bullets'] = [li.get_text(strip=True) for li in bullet_elements if li.get_text(strip=True)]
 
+            # Extract description
             desc_element = soup.select_one('#productDescription')
-            details['description'] = desc_element.get_text(strip=True) if desc_element else "Description not found"
+            if desc_element:
+                details['description'] = desc_element.get_text(strip=True)
 
+            # Extract reviews
             review_elements = soup.select('div[data-hook="review-collapsed"] span, .review-text-content span')[:15]
             details['reviews_raw'] = [review.get_text(strip=True) for review in review_elements if review.get_text(strip=True)]
 
+            # Extract Q&A
             qna_blocks = soup.select('#ask_lazy_load_div .a-fixed-left-grid-inner, div[data-cel-widget^="ask-"]')[:10]
             for block in qna_blocks:
                 question_elem = block.select_one('a.a-link-normal[href*="ask/questions/"], .a-declarative .a-link-normal span')
@@ -433,11 +527,12 @@ async def scrape_amazon_listing_details(url: str) -> dict:
                         details['qna_raw'].append(f"Q: {q} A: {a}")
 
             await browser.close()
-            CACHE[url] = details
             logger.info("Amazon scraping successful with Playwright.")
-            
+
     except Exception as e:
         logger.error(f"Error during Playwright Amazon scraping for {url}: {e}. Falling back to requests method.")
+
+        # Fallback scraping method using requests
         try:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -447,49 +542,101 @@ async def scrape_amazon_listing_details(url: str) -> dict:
                 "Connection": "keep-alive",
                 "Upgrade-Insecure-Requests": "1"
             }
+
             response = requests.get(url, headers=headers, timeout=15)
+
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, 'html.parser')
+
+                # Extract basic product information
                 title_element = soup.select_one('#productTitle')
-                details['title'] = title_element.get_text(strip=True) if title_element else "Title not found"
+                if title_element:
+                    details['title'] = title_element.get_text(strip=True)
+
                 brand_element = soup.select_one('#bylineInfo') or soup.select_one('a#brand')
-                details['brand'] = brand_element.get_text(strip=True).replace('Visit the ', '').replace(' Store', '').replace('Brand: ', '') if brand_element else "Brand not found"
+                if brand_element:
+                    details['brand'] = brand_element.get_text(strip=True).replace('Visit the ', '').replace(' Store', '').replace('Brand: ', '')
+
                 bullet_elements = soup.select('#feature-bullets .a-list-item')
                 details['bullets'] = [li.get_text(strip=True) for li in bullet_elements if li.get_text(strip=True)]
+
                 desc_element = soup.select_one('#productDescription')
-                details['description'] = desc_element.get_text(strip=True) if desc_element else "Description not found"
+                if desc_element:
+                    details['description'] = desc_element.get_text(strip=True)
+
                 logger.info("Amazon scraping successful with fallback requests method.")
             else:
                 logger.warning(f"Fallback requests method failed with status code {response.status_code} for {url}.")
+
         except Exception as req_e:
             logger.error(f"Error during fallback requests scraping for {url}: {req_e}")
-    
-    # Check if we got meaningful data
-    if (details["title"] == "Not Found" or not details["bullets"]) and url:
+
+    # Check if we need to use web search fallback
+    is_data_incomplete = (
+        details["title"] == "Not Found" or
+        details["brand"] == "Not Found" or
+        not details["bullets"] or
+        details["description"] == "Not Found" or
+        not details["reviews_raw"]
+    )
+
+    if is_data_incomplete and url:
         try:
             # Extract product name from URL for better search
-            product_query = url.split("/")[-1].replace("-", " ")
-            if len(product_query) < 5:  # If URL parsing didn't yield good results
-                product_query = url  # Use full URL
+            product_parts = url.split("/")
+            product_query = ""
 
-            logger.info(f"Amazon scraping failed or incomplete, using enhanced web search fallback for: {product_query}")
-            fallback_details = await enhanced_Web_Search_fallback(product_query, details)
+            # Look for the product ID or name in the URL
+            for part in product_parts:
+                if part.startswith("B0") and len(part) >= 10:  # Likely an ASIN
+                    product_query = part
+                    break
 
-            # Update our details with fallback data
+            if not product_query:
+                # Try to extract from the product name in URL
+                for part in product_parts:
+                    if len(part) > 5 and "-" in part:
+                        product_query = part.replace("-", " ")
+                        break
+
+            # If we still don't have a good query, use the domain and some URL parts
+            if not product_query or len(product_query) < 5:
+                product_query = url
+
+            logger.info(f"Amazon scraping incomplete, using enhanced web search fallback for: {product_query}")
+
+            # Call the enhanced web search fallback with the Amazon URL
+            fallback_details = await enhanced_Web_Search_fallback(
+                query=product_query,
+                product_info=details,
+                amazon_url=url
+            )
+
+            # Merge the fallback data with our existing details
             for key, value in fallback_details.items():
-                if (details[key] == "Not Found" or not details[key]) and value:
-                    details[key] = value
-                # For lists, merge if both have content
-                elif isinstance(value, list) and isinstance(details[key], list) and value and details[key]:
-                    details[key] = list(set(details[key] + value))  # Remove duplicates
+                # Only update if the current value is empty or placeholder
+                if key in details:
+                    if details[key] == "Not Found" or (isinstance(details[key], list) and not details[key]):
+                        details[key] = value
+                    # For text fields, prefer longer content if current is minimal
+                    elif isinstance(value, str) and isinstance(details[key], str):
+                        if len(details[key]) < 50 and len(value) > len(details[key]):
+                            details[key] = value
+                    # For lists, combine unique items
+                    elif isinstance(value, list) and isinstance(details[key], list):
+                        # Add new items that aren't already present
+                        for item in value:
+                            if item not in details[key]:
+                                details[key].append(item)
 
             logger.info("Enhanced fallback data successfully merged with partial scraping results")
+
         except Exception as fallback_err:
             logger.error(f"Enhanced web search fallback failed: {fallback_err}")
-    
+
+    # Cache the results
     CACHE[url] = details
     return details
-
 # --- GPT UTILITY FUNCTIONS ---
 @retry(
     stop=stop_after_attempt(MAX_RETRIES),
