@@ -413,104 +413,199 @@ def generate_creative_brief(inputs: dict, website_data: str, amazon_details: dic
     prompt = f"""
     You are an expert Amazon strategist and copywriter generating a Creative Brief JSON.
 
-    **Primary Data Source:** Scraped Amazon Listing Data provided below.
-    **Secondary Data Source:** User Provided Input (confirm details, fill gaps).
-    **Tertiary Data Source:** Scraped Website Content (supplementary context only).
+**Primary Data Source:** Scraped Amazon Listing Data provided below.
+**Secondary Data Source:** User Provided Input (confirm details, fill gaps).
+**Tertiary Data Source:** Scraped Website Content (supplementary context only).
 
-    **CRITICAL INSTRUCTIONS:**
-    1. Generate the **complete** Creative Brief in the specified JSON format.
-    2. Answer **ALL** questions thoroughly with detailed, product-related content.
-    3. Derive answers **PRIMARILY** from the "Scraped Amazon Listing Data". Use the Title, Brand, Bullets, Description, and Customer Insights (VOC).
-    4. Use "User Provided Input" to confirm information (like brand name, product category) or fill details not explicitly on the Amazon page (like specific competitors, detailed brand story).
-    5. Use "Scraped Website Content" **only** if information is missing from both Amazon and User Input.
-    6. **DO NOT LEAVE ANSWERS BLANK.** If information isn't directly stated in the Amazon data or other sources, **infer logically** based on any available context (e.g., product title, category, or general user input). If minimal data is available, **generate detailed content** related to the product by making educated assumptions and clearly state these as suggestions (e.g., "Suggested Target Audience based on product type: [Detailed description]. Further research recommended."). Provide actionable insights and creative suggestions to fill all fields comprehensively.
-    7. Ensure all responses are **detailed and specific**, avoiding generic or vague answers. For each section, elaborate on how the information or suggestion ties to the product or brand strategy on Amazon.
-    8. Output **ONLY** the valid JSON structure. No introductory text, comments, or markdown formatting outside the JSON values.
+**CRITICAL INSTRUCTIONS:**
+1. Generate the **complete** Creative Brief in the specified JSON format.
+2. Answer **ALL** questions thoroughly with detailed, product-related content.
+3. Derive answers **PRIMARILY** from the "Scraped Amazon Listing Data". Use the Title, Brand, Bullets, Description, and Customer Insights (VOC).
+4. Use "User Provided Input" to confirm information (like brand name, product category) or fill details not explicitly on the Amazon page (like specific competitors, detailed brand story).
+5. Use "Scraped Website Content" **only** if information is missing from both Amazon and User Input.
+6. **DO NOT LEAVE ANSWERS BLANK.** If information isn't directly stated in the Amazon data or other sources, **infer logically** based on any available context (e.g., product title, category, or general user input). If minimal data is available, **generate detailed content** related to the product by making educated assumptions and clearly state these as suggestions (e.g., "Suggested Target Audience based on product type: [Detailed description]. Further research recommended."). Provide actionable insights and creative suggestions to fill all fields comprehensively.
+7. Ensure all responses are **detailed and specific**, avoiding generic or vague answers. For each section, elaborate on how the information or suggestion ties to the product or brand strategy on Amazon.
+8. Output **ONLY** the valid JSON structure. No introductory text, comments, or markdown formatting outside the JSON values.
+9. Use all available resources to triangulate accurate, nuanced, and brand-aligned data. Prioritize consistency with brand language and tone. Cross-reference between assets to resolve ambiguity. Extract directly from structured sections. If conflicts occur, default to the latest listing or website over other sources.
 
-    ---
-    ### Scraped Amazon Listing Data (PRIMARY SOURCE):
-    **Brand:** {amazon_brand}
-    **Product Title:** {amazon_title}
-    **Bullet Points:**
-    {amazon_bullets_str}
-    **Product Description:**
-    {amazon_description[:2500]}...
-    **Customer Insights (VOC from Reviews/Q&A):**
-    {voc_insights}
-    ---
-    ### User Provided Input (Secondary Source):
-    {user_input_summary}
-    {guideline_section}
-    ---
-    {website_section}
-    ---
+**ENHANCED DATA EXTRACTION GUIDANCE:**
 
-    **JSON Structure to Generate:**
-    {{"editable_sections": [
-        {{"title": "PROJECT OVERVIEW", "questions": [
-            {{"question": "Project Name", "answer": ""}},
-            {{"question": "Brand Name", "answer": ""}},
-            {{"question": "Website", "answer": ""}},
-            {{"question": "Amazon Listing (if available)", "answer": "{inputs.get('amazon_listing', '')}"}},
-            {{"question": "Instagram Handle (if applicable)", "answer": ""}}
-        ]}},
-        {{"title": "PRODUCT SNAPSHOT", "questions": [
-            {{"question": "What exactly is the product?", "answer": ""}},
-            {{"question": "What does it do and how does it work?", "answer": ""}},
-            {{"question": "What problem does it solve?", "answer": ""}},
-            {{"question": "Who is it meant for?", "answer": ""}}
-        ]}},
-        {{"title": "CURRENT LISTING CHALLENGES", "questions": [
-            {{"question": "What's broken or underwhelming about the current Amazon listing, brand positioning, or creative execution?", "answer": ""}},
-            {{"question": "Where are they losing conversions or attention?", "answer": ""}}
-        ]}},
-        {{"title": "TARGET CUSTOMER DEEP DIVE", "questions": [
-            {{"question": "Gender, age range, location, income, profession", "answer": ""}},
-            {{"question": "Life stage or identity (e.g., new moms, eco-conscious Gen Z, busy professionals)", "answer": ""}},
-            {{"question": "Pain points, desires, motivations", "answer": ""}},
-            {{"question": "How do they shop on Amazon? What do they care about when scrolling?", "answer": ""}}
-        ]}},
-        {{"title": "BARRIERS TO PURCHASE", "questions": [
-            {{"question": "List the common doubts, hesitations, or FAQ-style friction points that stop people from buying — even if they like the product.", "answer": ""}}
-        ]}},
-        {{"title": "BRAND VOICE & TONE", "questions": [
-            {{"question": "Describe the tone and copywriting style the brand uses or should use (e.g., bold, sassy, informative, premium, conversational).", "answer": ""}},
-            {{"question": "Include any signature words, phrases, or linguistic quirks.", "answer": ""}}
-        ]}},
-        {{"title": "USPs (UNIQUE SELLING PROPOSITIONS)", "questions": [
-            {{"question": "What makes this product meaningfully different from other options in the category?", "answer": ""}},
-            {{"question": "Think functional benefits, emotional angles, and cultural relevance.", "answer": ""}}
-        ]}},
-        {{"title": "5-SECOND WOW FACTOR", "questions": [
-            {{"question": "If a customer saw this listing for 5 seconds, what single visual hook, copy line, or feature would stop them in their tracks?", "answer": ""}}
-        ]}},
-        {{"title": "KEY FEATURES (WITH CONTEXT)", "questions": [
-            {{"question": "List 4–6 major features. But go beyond just the bullet points — explain: Why does this matter to the buyer? How does it connect to their lifestyle or values?", "answer": ""}}
-        ]}},
-        {{"title": "TOP 6 SELLING POINTS (WITH STRATEGIC JUSTIFICATION)", "questions": [
-            {{"question": "For each of the client's selected selling points: State the point. Explain *why* it's strategically powerful for this product and customer.", "answer": ""}}
-        ]}},
-        {{"title": "COMPETITIVE LANDSCAPE", "questions": [
-            {{"question": "List 2–3 main competitors", "answer": ""}},
-            {{"question": "Describe how this product compares", "answer": ""}},
-            {{"question": "Mention any Amazon-specific differentiators (e.g. bundle, shipping time, design)", "answer": ""}}
-        ]}},
-        {{"title": "SEARCH & KEYWORDS STRATEGY", "questions": [
-            {{"question": "Suggest relevant search terms and niche keywords to target. These should align with user intent, category trends, or long-tail SEO goals.", "answer": ""}}
-        ]}},
-        {{"title": "BRAND STORY, VALUES & PURPOSE", "questions": [
-            {{"question": "Give a short but meaningful brand origin story or founder story.", "answer": ""}},
-            {{"question": "Highlight core values, emotional drivers, or the \"bigger why\" behind the brand's existence.", "answer": ""}}
-        ]}},
-        {{"title": "DESIGN DIRECTION", "questions": [
-            {{"question": "Summarize the client's aesthetic preferences", "answer": ""}},
-            {{"question": "Suggest how the visuals, layout, or color themes should feel (e.g., clean/minimal, bold/graphic, warm/natural)", "answer": ""}}
-        ]}},
-        {{"title": "FINAL NOTES & STRATEGIC CALLOUTS", "questions": [
-            {{"question": "Include any extra insights for the creative team, such as: Packaging or compliance considerations, Customer education needs, Cross-sell or upsell potential, Social proof or influencer angles", "answer": ""}}
-        ]}}
-    ]}}
+**For PRODUCT SNAPSHOT:**
+- Clearly define what the product is, focusing on factual attributes.
+- Explain how it works using specific technical details from Amazon bullets and description.
+- Identify the primary customer problem it solves by analyzing negative reviews of competitors.
+- Define the target audience based on demographic and psychographic indicators in reviews and Q&A.
 
+**For CURRENT LISTING CHALLENGES:**
+- Analyze the current listing for conversion barriers, unclear messaging, or missed opportunities.
+- Look for patterns in lower-star reviews that might indicate listing weaknesses.
+- Identify where the listing may be losing attention based on competitor comparison.
+
+**For TARGET CUSTOMER DEEP DIVE:**
+- Extract demographic details: Gender Identity (Male, Female, Both, Others), Age Range (Infants to Senior Citizens), Income Segment (Budget-Conscious to Affluent), Geographic Focus, Generation.
+- Identify psychographics: Life Stage or Identity (School-Age Children, College Students, Working Professionals, Parents, etc.), Buying Behavior (Impulse Buyer, Research-Driven, Repeat Buyer, etc.).
+- Extract from Amazon reviews, Q&A, Instagram engagement, influencer collaborations, website content.
+- Look for self-revealing buyer details in verified reviews, situational phrases in Q&A, visual cues in social media.
+- Analyze pain points from negative competitor reviews and "Will this help with..." questions.
+- Understand shopping behavior by analyzing review language and question patterns.
+
+**For BARRIERS TO PURCHASE:**
+- Identify common doubts from Amazon Q&A sections.
+- Extract hesitations from 3-star reviews (balanced feedback often reveals key concerns).
+- Look for repeated questions about specific features, durability, or compatibility.
+- Analyze competitor reviews for pain points your product solves.
+
+**For BRAND VOICE & TONE:**
+- Analyze how the brand speaks across touchpoints (Amazon bullets, website, social).
+- Identify patterns: Is it witty? Data-backed? Luxe and polished?
+- Look for voice cues: contractions, scientific language, persuasive commands, humor.
+- Select from: Friendly & Conversational, Bold & Confident, Quirky & Fun, Calm & Minimal, Scientific & Informative, Premium & Sophisticated, Empowering, Playful & Kid-Friendly.
+- Note signature phrases, terminology, or linguistic patterns used consistently.
+
+**For USPs (UNIQUE SELLING PROPOSITIONS):**
+- Identify market-facing differentiators that answer "Why should someone buy this product over others?"
+- Look for rare features, proven benefits, customer pain points fixed, or market gaps filled.
+- Extract from website bold sections, Amazon bullet points that competitors don't mention, and customer reviews.
+- USPs are often a combination of: a rare feature, a proven benefit, a customer pain point it fixes, a market gap it fills.
+- Eliminate generic fluff like "premium," "high quality," "great value."
+- Make USPs competitor-aware: Would this stand out in a side-by-side chart?
+
+**For 5-SECOND WOW FACTOR:**
+- Identify the "mic-drop moment" - the hook that turns scrollers into shoppers.
+- Extract from: A striking product feature/claim, bold design/packaging, or a powerful stat.
+- Keep it short, powerful, and visual if possible.
+- Maximum 20 words.
+
+**For KEY FEATURES:**
+- Extract features that describe what the product is made of, how it's built, or what it physically does.
+- Focus on factual attributes like materials, construction, technology - not benefits or outcomes.
+- Look for nouns and adjectives in Amazon bullet points that describe construction, materials, technology.
+- Clean the data by avoiding repetition and merging similar descriptions.
+- Format as 3-4 crisp bullet points with a 1-liner explanation per bullet.
+- Connect each feature to buyer lifestyle or values to show relevance.
+
+**For TOP 6 SELLING POINTS:**
+- Identify 3-6 strongest product truths that justify purchase.
+- Extract from: Amazon listing assets, brand guide, product website, customer reviews, competitor shortcomings.
+- Consider: Unique Features, Product Innovation, Innovative Design, Versatile Uses, Exceptional Performance, Compact & Portable, Safety & Reliability, Customer Reviews, Quality Materials, Ingredients, Clinical Backing, Brand Credibility, Value for Money, Ease of Use, Sustainable Practices, Made in USA, Kid-Friendly, Trusted by Professionals, Long-Lasting/Durability, Award-Winning, Women-Owned.
+- Justify each point with evidence using the 3-anchor framework: Customer Review Insight, Product Attribute, Competitive Differentiator.
+- Be descriptive, not salesy - show what it does and why that matters.
+
+**For COMPETITIVE LANDSCAPE:**
+- Identify competitors that are visually or functionally similar, in the same Amazon category, or frequently mentioned.
+- Look for brand name drops in reviews: "I switched from X," "This is better than Y."
+- Avoid resellers, drop-shippers, aggregator-run listings, or brands from different niches.
+- Compare on form, price point, use case, or packaging.
+- Identify Amazon-specific advantages your product has over competitors.
+
+**For SEARCH & KEYWORDS STRATEGY:**
+- Extract high-intent search terms from Amazon autocomplete.
+- Analyze top converting keywords if available from analytics.
+- Look for niche-specific terminology in customer reviews and Q&A.
+- Identify long-tail variations that match user intent.
+
+**For BRAND STORY, VALUES & PURPOSE:**
+- Structure brand story as: Why the brand started, what it believes in, how it evolved.
+- Extract from: Website About Page, press mentions, founder interviews, Instagram captions.
+- For founder story, follow format: Origin trigger → A-ha moment → Promise to the customer.
+- For values, select from: Sustainability, Innovation, Wellness, Transparency, Inclusivity, Quality, Empowerment, Community, Other.
+- Ensure each value is backed by visible proof or initiative.
+
+**For DESIGN DIRECTION:**
+- Analyze layout, color use, image framing, copy tone of reference designs.
+- Categorize as: Clean/minimal, Editorial & Bold, Kid-friendly, Visual First, Lifestyle Heavy.
+- Provide specific visual do's (colors, layouts, text hierarchy, icon styles) and don'ts.
+- Identify packshots, lifestyle imagery, icons/logos/fonts/brand colors needed.
+
+**For FINAL NOTES & STRATEGIC CALLOUTS:**
+- Include any additional insights not covered in previous sections.
+- Consider packaging or compliance considerations, customer education needs, cross-sell potential.
+- Highlight social proof or influencer angles if relevant.
+- Note any data insights from analytics if available.
+
+---
+### Scraped Amazon Listing Data (PRIMARY SOURCE):
+**Brand:** {amazon_brand}
+**Product Title:** {amazon_title}
+**Bullet Points:**
+{amazon_bullets_str}
+**Product Description:**
+{amazon_description[:2500]}...
+**Customer Insights (VOC from Reviews/Q&A):**
+{voc_insights}
+---
+### User Provided Input (Secondary Source):
+{user_input_summary}
+{guideline_section}
+---
+{website_section}
+---
+
+**JSON Structure to Generate:**
+{"editable_sections": [
+    {"title": "PROJECT OVERVIEW", "questions": [
+        {"question": "Project Name", "answer": ""},
+        {"question": "Brand Name", "answer": ""},
+        {"question": "Website", "answer": ""},
+        {"question": "Amazon Listing (if available)", "answer": "{inputs.get('amazon_listing', '')}"},
+        {"question": "Instagram Handle (if applicable)", "answer": ""}
+    ]},
+    {"title": "PRODUCT SNAPSHOT", "questions": [
+        {"question": "What exactly is the product?", "answer": ""},
+        {"question": "What does it do and how does it work?", "answer": ""},
+        {"question": "What problem does it solve?", "answer": ""},
+        {"question": "Who is it meant for?", "answer": ""}
+    ]},
+    {"title": "CURRENT LISTING CHALLENGES", "questions": [
+        {"question": "What's broken or underwhelming about the current Amazon listing, brand positioning, or creative execution?", "answer": ""},
+        {"question": "Where are they losing conversions or attention?", "answer": ""}
+    ]},
+    {"title": "TARGET CUSTOMER DEEP DIVE", "questions": [
+        {"question": "Gender, age range, location, income, profession", "answer": ""},
+        {"question": "Life stage or identity (e.g., new moms, eco-conscious Gen Z, busy professionals)", "answer": ""},
+        {"question": "Pain points, desires, motivations", "answer": ""},
+        {"question": "How do they shop on Amazon? What do they care about when scrolling?", "answer": ""}
+    ]},
+    {"title": "BARRIERS TO PURCHASE", "questions": [
+        {"question": "List the common doubts, hesitations, or FAQ-style friction points that stop people from buying — even if they like the product.", "answer": ""}
+    ]},
+    {"title": "BRAND VOICE & TONE", "questions": [
+        {"question": "Describe the tone and copywriting style the brand uses or should use (e.g., bold, sassy, informative, premium, conversational).", "answer": ""},
+        {"question": "Include any signature words, phrases, or linguistic quirks.", "answer": ""}
+    ]},
+    {"title": "USPs (UNIQUE SELLING PROPOSITIONS)", "questions": [
+        {"question": "What makes this product meaningfully different from other options in the category?", "answer": ""},
+        {"question": "Think functional benefits, emotional angles, and cultural relevance.", "answer": ""}
+    ]},
+    {"title": "5-SECOND WOW FACTOR", "questions": [
+        {"question": "If a customer saw this listing for 5 seconds, what single visual hook, copy line, or feature would stop them in their tracks?", "answer": ""}
+    ]},
+    {"title": "KEY FEATURES (WITH CONTEXT)", "questions": [
+        {"question": "List 4–6 major features. But go beyond just the bullet points — explain: Why does this matter to the buyer? How does it connect to their lifestyle or values?", "answer": ""}
+    ]},
+    {"title": "TOP 6 SELLING POINTS (WITH STRATEGIC JUSTIFICATION)", "questions": [
+        {"question": "For each of the client's selected selling points: State the point. Explain *why* it's strategically powerful for this product and customer.", "answer": ""}
+    ]},
+    {"title": "COMPETITIVE LANDSCAPE", "questions": [
+        {"question": "List 2–3 main competitors", "answer": ""},
+        {"question": "Describe how this product compares", "answer": ""},
+        {"question": "Mention any Amazon-specific differentiators (e.g. bundle, shipping time, design)", "answer": ""}
+    ]},
+    {"title": "SEARCH & KEYWORDS STRATEGY", "questions": [
+        {"question": "Suggest relevant search terms and niche keywords to target. These should align with user intent, category trends, or long-tail SEO goals.", "answer": ""}
+    ]},
+    {"title": "BRAND STORY, VALUES & PURPOSE", "questions": [
+        {"question": "Give a short but meaningful brand origin story or founder story.", "answer": ""},
+        {"question": "Highlight core values, emotional drivers, or the \"bigger why\" behind the brand's existence.", "answer": ""}
+    ]},
+    {"title": "DESIGN DIRECTION", "questions": [
+        {"question": "Summarize the client's aesthetic preferences", "answer": ""},
+        {"question": "Suggest how the visuals, layout, or color themes should feel (e.g., clean/minimal, bold/graphic, warm/natural)", "answer": ""}
+    ]},
+    {"title": "FINAL NOTES & STRATEGIC CALLOUTS", "questions": [
+        {"question": "Include any extra insights for the creative team, such as: Packaging or compliance considerations, Customer education needs, Cross-sell or upsell potential, Social proof or influencer angles", "answer": ""}
+    ]}
+]}
     Generate the JSON output now:
     """
     try:
