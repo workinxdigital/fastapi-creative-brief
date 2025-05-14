@@ -273,78 +273,55 @@ class WebSearchScraper:
             logger.error(f"Error in web search: {e}")
             return []
     
-    async def scrape_website(self, url: str) -> str:
-        """
-        Scrape text content from a website using Playwright
-        
-        Args:
-            url: The website URL to scrape
-            
-        Returns:
-            Extracted text content from the website
-        """
-        cache_key = self._get_cache_key("website", url=url)
-        cached_result = self._check_cache(cache_key)
-        if cached_result:
-            return cached_result
-            
-        logger.info(f"Attempting to scrape website: {url}")
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                page = await browser.new_page()
-                await page.goto(url, timeout=15000)
-                content = await page.content()
-                soup = BeautifulSoup(content, 'html.parser')
-                
-                # Extract text from relevant elements
-                texts = [element.get_text(separator=' ', strip=True) for element in 
-                         soup.find_all(['p', 'h1', 'h2', 'h3', 'li', 'span', 'div.description', 'div.content'])]
-                full_text = ' '.join(filter(None, texts))
-                await browser.close()
-                
-                # Check if scraping returned minimal content
-                if len(full_text) < 100:
-                    logger.warning(f"Website scraping returned minimal content for {url}. Will try fallback.")
-                    raise Exception("Minimal content retrieved")
-                
-                logger.info(f"Website scraping successful for {url}.")
-                self._update_cache(cache_key, full_text)
-                return full_text
-                
-        except Exception as e:
-            logger.error(f"Could not scrape website {url}: {e}")
-            
-            # Use web search fallback
-            try:
-                logger.info(f"Using web search fallback for website content: {url}")
-                domain = url.split("//")[-1].split("/")[0]
-                
-                # Extract hints from URL path
-                path_parts = url.split("/")
-                content_hint = ""
-                if len(path_parts) > 3:
-                    content_hint = path_parts[-1].replace("-", " ").replace(".html", "").replace(".php", "")
-                
-                query = f"{domain} {content_hint} website content information"
-                search_results = await self.search(query, num_results=5, search_type="general")
-                
-                if not search_results:
-                    return f"Could not retrieve content from {url}"
-                    
-                # Combine search results into a text representation
-                combined_content = f"Website: {url}\n\n"
-                for result in search_results:
-                    if domain in result.get("url", ""):
-                        combined_content += f"Title: {result.get('title', '')}\n"
-                        combined_content += f"Content: {result.get('snippet', '')}\n\n"
-                
-                self._update_cache(cache_key, combined_content)
-                return combined_content
-                
-            except Exception as fallback_err:
-                logger.error(f"Web search fallback for website content failed: {fallback_err}")
-                return f"Could not scrape website: {e}. Web search fallback also failed: {fallback_err}"
+    # Remove the Playwright import
+# from playwright.async_api import async_playwright
+
+# Update the WebSearchScraper.scrape_website method to use web search instead of Playwright
+async def scrape_website(self, url: str) -> str:
+    """
+    Scrape text content from a website using web search
+
+    Args:
+        url: The website URL to scrape
+
+    Returns:
+        Extracted text content from the website
+    """
+    cache_key = self._get_cache_key("website", url=url)
+    cached_result = self._check_cache(cache_key)
+    if cached_result:
+        return cached_result
+
+    logger.info(f"Attempting to scrape website via web search: {url}")
+    try:
+        # Extract domain and path for better search
+        domain = url.split("//")[-1].split("/")[0]
+
+        # Extract hints from URL path
+        path_parts = url.split("/")
+        content_hint = ""
+        if len(path_parts) > 3:
+            content_hint = path_parts[-1].replace("-", " ").replace(".html", "").replace(".php", "")
+
+        query = f"{domain} {content_hint} website content information"
+        search_results = await self.search(query, num_results=5, search_type="general")
+
+        if not search_results:
+            return f"Could not retrieve content from {url}"
+
+        # Combine search results into a text representation
+        combined_content = f"Website: {url}\n\n"
+        for result in search_results:
+            if domain in result.get("url", ""):
+                combined_content += f"Title: {result.get('title', '')}\n"
+                combined_content += f"Content: {result.get('snippet', '')}\n\n"
+
+        self._update_cache(cache_key, combined_content)
+        return combined_content
+
+    except Exception as e:
+        logger.error(f"Error scraping website via web search: {e}")
+        return f"Could not scrape website: {e}"
     
     async def extract_amazon_listing(self, url: str, include_storefront: bool = False) -> Dict[str, Any]:
         """
@@ -815,119 +792,670 @@ async def scrape_website_text(url: str) -> str:
     scraper = WebSearchScraper()
     return await scraper.scrape_website(url)
 
-async def scrape_amazon_listing_details(url: str, include_storefront: bool = False) -> dict:
+async def scrape_amazon_listing_details(url: str) -> dict:
     """
-    Scrape product details from an Amazon listing URL
-    
+    Scrapes product details from an Amazon listing URL using web search.
+    Uses OpenAI's web search capability to extract comprehensive product information.
+
     Args:
-        url: The Amazon product listing URL
-        include_storefront: Whether to also extract storefront information
-        
+    url: The Amazon product listing URL
+
     Returns:
-        Dictionary containing structured product information
+    dict: Product details including title, brand, bullets, description, reviews, and Q&A
     """
-    scraper = WebSearchScraper()
-    return await scraper.extract_amazon_listing(url, include_storefront)
+    logger.info(f"Attempting to scrape Amazon listing via web search: {url}")
+
+    # Initialize empty product details structure
+    details = {
+        "title": "Not Found",
+        "brand": "Not Found",
+        "bullets": [],
+        "description": "Not Found",
+        "reviews_raw": [],
+        "qna_raw": []
+    }
+
+    # Check cache first
+    cache_key = f"amazon:{url}"
+    if cache_key in CACHE:
+        logger.info(f"Using cached data for Amazon URL: {url}")
+        return CACHE[cache_key]
+
+    # Extract ASIN and product name from URL for better search
+    asin = None
+    product_name = ""
+
+    # Extract ASIN using regex patterns
+    if "/dp/" in url:
+        asin_match = re.search(r'/dp/([A-Z0-9]{10})', url)
+        if asin_match:
+            asin = asin_match.group(1)
+
+    if not asin and "/product/" in url:
+        asin_match = re.search(r'/product/([A-Z0-9]{10})', url)
+        if asin_match:
+            asin = asin_match.group(1)
+
+    if not asin:
+        # Try to find any 10-character alphanumeric string that might be an ASIN
+        asin_match = re.search(r'([B][0-9A-Z]{9})', url)
+        if asin_match:
+            asin = asin_match.group(1)
+
+    # Extract product name from URL
+    name_parts = url.split('/')
+    for part in name_parts:
+        if part and '-' in part and len(part) > 10 and not part.startswith('dp') and not part.startswith('B0'):
+            product_name = part.replace('-', ' ')
+            break
+
+    logger.info(f"Extracted ASIN: {asin if asin else 'None'}")
+    logger.info(f"Extracted product name: {product_name}")
+    logger.info(f"Extracted potential brand: {product_name.split()[0] if product_name else ''}")
+
+    # Prepare for web search
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        search_results = []
+
+        # Step 1: Direct search for the exact Amazon product page
+        exact_product_query = f"{url} amazon product page"
+
+        payload = {
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "system", "content": "You are a helpful web search assistant focused on finding accurate product information."},
+                {"role": "user", "content": f"Search for: {exact_product_query}"}
+            ],
+            "tools": [{
+                "type": "Web Search",
+                "function": {
+                    "name": "Web Search",
+                    "parameters": {}
+                }
+            }],
+            "tool_choice": {"type": "function", "function": {"name": "Web Search"}}
+        }
+
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload
+        )
+
+        if response.status_code == 200:
+            response_data = response.json()
+            tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+            if tool_calls:
+                search_result = tool_calls[0]["function"].get("arguments", "{}")
+                search_results.append(json.loads(search_result).get("search_results", ""))
+                logger.info("Successfully retrieved direct product page information")
+
+        # Step 2: Search for product specifications and features
+        specs_query = f"amazon {asin if asin else product_name} product specifications features details"
+
+        payload["messages"][1]["content"] = f"Search for: {specs_query}"
+
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload
+        )
+
+        if response.status_code == 200:
+            response_data = response.json()
+            tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+            if tool_calls:
+                search_result = tool_calls[0]["function"].get("arguments", "{}")
+                search_results.append(json.loads(search_result).get("search_results", ""))
+                logger.info("Successfully retrieved product specifications")
+
+        # Step 3: Search for product reviews
+        reviews_query = f"amazon {asin if asin else product_name} customer reviews ratings"
+
+        payload["messages"][1]["content"] = f"Search for: {reviews_query}"
+
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload
+        )
+
+        if response.status_code == 200:
+            response_data = response.json()
+            tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+            if tool_calls:
+                search_result = tool_calls[0]["function"].get("arguments", "{}")
+                search_results.append(json.loads(search_result).get("search_results", ""))
+                logger.info("Successfully retrieved product reviews")
+
+        # Step 4: Search for product Q&A
+        qna_query = f"amazon {asin if asin else product_name} questions and answers FAQ"
+
+        payload["messages"][1]["content"] = f"Search for: {qna_query}"
+
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload
+        )
+
+        if response.status_code == 200:
+            response_data = response.json()
+            tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+            if tool_calls:
+                search_result = tool_calls[0]["function"].get("arguments", "{}")
+                search_results.append(json.loads(search_result).get("search_results", ""))
+                logger.info("Successfully retrieved product Q&A")
+
+        # Step 5: Search for brand information
+        if "brand" in url.lower() or product_name:
+            # Try to extract brand from URL or product name
+            potential_brand = ""
+            if "brand" in url.lower():
+                brand_parts = url.lower().split("brand=")
+                if len(brand_parts) > 1:
+                    potential_brand = brand_parts[1].split("&")[0]
+
+            if not potential_brand and product_name:
+                # Take first 1-2 words as potential brand
+                name_parts = product_name.split()
+                if len(name_parts) > 0:
+                    potential_brand = " ".join(name_parts[:min(2, len(name_parts))])
+
+            if potential_brand:
+                brand_query = f"{potential_brand} brand information amazon"
+
+                payload["messages"][1]["content"] = f"Search for: {brand_query}"
+
+                response = requests.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers=headers,
+                    json=payload
+                )
+
+                if response.status_code == 200:
+                    response_data = response.json()
+                    tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+                    if tool_calls:
+                        search_result = tool_calls[0]["function"].get("arguments", "{}")
+                        search_results.append(json.loads(search_result).get("search_results", ""))
+                        logger.info(f"Successfully retrieved brand information for {potential_brand}")
+
+        # Step 6: Process all search results with GPT-4 to extract structured information
+        combined_search_results = "\n\n---\n\n".join([result for result in search_results if result])
+
+        extraction_prompt = f"""
+        You are an expert Amazon product data extractor. Your task is to extract detailed, accurate product information from web search results about an Amazon product.
+
+        Amazon Product URL: {url}
+        {f"Amazon ASIN: {asin}" if asin else ""}
+        {f"Product Name: {product_name}" if product_name else ""}
+
+        WEB SEARCH RESULTS:
+        {combined_search_results}
+
+        Extract the following information with high precision and detail:
+
+        1. Product Title (full and accurate, including brand and model number if available)
+        2. Brand Name (just the brand name without additional text like "by" or "from")
+        3. Key Features/Bullet Points (extract at least 5-8 if available, focusing on technical specifications, materials, dimensions, and key selling points)
+        4. Product Description (provide a detailed, comprehensive description that covers what the product is, how it works, and its benefits)
+        5. Customer Reviews (extract 5-10 detailed reviews that provide specific feedback about the product, including both positive and negative perspectives)
+        6. Questions and Answers (extract 3-5 detailed Q&A pairs that provide insights about common customer concerns or usage information)
+
+        IMPORTANT EXTRACTION GUIDELINES:
+        - For the title, extract the EXACT product title as it appears on Amazon, including all model numbers and specifications
+        - For bullet points, maintain the original formatting and technical details, avoiding generic marketing language
+        - For the description, provide a comprehensive overview that includes technical details, use cases, and benefits
+        - For reviews, include the reviewer's rating if available (e.g., "5-star review:") and focus on detailed, specific feedback
+        - For Q&A, include complete questions and their corresponding answers
+        - If information is not available or unclear, indicate "Not Found" rather than guessing
+        - Ensure all extracted information is specific to THIS product, not similar or related products
+
+        Format your response as a valid JSON object with these keys: title, brand, bullets (array), description, reviews_raw (array), qna_raw (array).
+        """
+
+        # Call OpenAI with JSON response format
+        extraction_response = call_openai_api(
+            prompt=extraction_prompt,
+            model=GPT_MODEL,
+            temperature=0.2,  # Lower temperature for more factual extraction
+            response_format={"type": "json_object"}
+        )
+
+        # Parse the response
+        extracted_data = json.loads(extraction_response)
+
+        # Validate and clean the extracted data
+        if "title" in extracted_data and extracted_data["title"] and extracted_data["title"] != "Not Found":
+            details["title"] = extracted_data["title"]
+
+        if "brand" in extracted_data and extracted_data["brand"] and extracted_data["brand"] != "Not Found":
+            details["brand"] = extracted_data["brand"]
+
+        if "bullets" in extracted_data and isinstance(extracted_data["bullets"], list) and extracted_data["bullets"]:
+            # Clean bullet points - remove duplicates and empty entries
+            cleaned_bullets = []
+            seen_bullets = set()
+            for bullet in extracted_data["bullets"]:
+                # Normalize bullet text for deduplication
+                normalized = re.sub(r'\s+', ' ', bullet.lower().strip())
+                if normalized and normalized not in seen_bullets and len(normalized) > 5:
+                    cleaned_bullets.append(bullet)
+                    seen_bullets.add(normalized)
+            details["bullets"] = cleaned_bullets
+
+        if "description" in extracted_data and extracted_data["description"] and extracted_data["description"] != "Not Found":
+            details["description"] = extracted_data["description"]
+
+        if "reviews_raw" in extracted_data and isinstance(extracted_data["reviews_raw"], list) and extracted_data["reviews_raw"]:
+            # Clean reviews - remove duplicates and ensure they're substantial
+            cleaned_reviews = []
+            seen_reviews = set()
+            for review in extracted_data["reviews_raw"]:
+                # Normalize review text for deduplication
+                normalized = re.sub(r'\s+', ' ', review.lower().strip())
+                if normalized and normalized not in seen_reviews and len(normalized) > 20:
+                    cleaned_reviews.append(review)
+                    seen_reviews.add(normalized)
+            details["reviews_raw"] = cleaned_reviews
+
+        if "qna_raw" in extracted_data and isinstance(extracted_data["qna_raw"], list) and extracted_data["qna_raw"]:
+            # Clean Q&A - ensure they're in Q&A format and substantial
+            cleaned_qna = []
+            for qna in extracted_data["qna_raw"]:
+                if ("Q:" in qna or "Question:" in qna) and ("A:" in qna or "Answer:" in qna) and len(qna) > 20:
+                    cleaned_qna.append(qna)
+                elif "?" in qna and len(qna) > 20:
+                    # Try to format as Q&A if it contains a question mark
+                    parts = qna.split("?", 1)
+                    if len(parts) == 2:
+                        formatted_qna = f"Q: {parts[0]}? A: {parts[1].strip()}"
+                        cleaned_qna.append(formatted_qna)
+            details["qna_raw"] = cleaned_qna
+
+        # Check if we have sufficient data
+        data_quality_score = 0
+        if details["title"] != "Not Found":
+            data_quality_score += 1
+        if details["brand"] != "Not Found":
+            data_quality_score += 1
+        if len(details["bullets"]) >= 3:
+            data_quality_score += 1
+        if details["description"] != "Not Found" and len(details["description"]) > 100:
+            data_quality_score += 1
+        if len(details["reviews_raw"]) >= 3:
+            data_quality_score += 1
+        if len(details["qna_raw"]) >= 2:
+            data_quality_score += 1
+
+        # If data quality is poor, try a second extraction with a different approach
+        if data_quality_score < 4:
+            logger.info(f"Initial data quality score is {data_quality_score}/6. Attempting secondary extraction.")
+
+            # Try a more focused extraction approach
+            secondary_extraction_prompt = f"""
+            You are an expert Amazon product data extractor. I need you to extract detailed product information from these search results about an Amazon product.
+
+            Product URL: {url}
+            {f"ASIN: {asin}" if asin else ""}
+            {f"Product Name: {product_name}" if product_name else ""}
+
+            SEARCH RESULTS:
+            {combined_search_results}
+
+            Your task is to carefully analyze these search results and extract the following information:
+
+            1. TITLE: The exact, complete product title as it appears on Amazon
+            2. BRAND: The company that makes this product (just the name)
+            3. BULLETS: 5-8 key feature bullet points that appear on the Amazon listing
+            4. DESCRIPTION: A detailed product description (at least 150 words)
+            5. REVIEWS: 5-10 actual customer reviews with their ratings if available
+            6. Q&A: 3-5 actual customer questions and their answers
+
+            EXTRACTION GUIDELINES:
+            - Focus on extracting FACTUAL information directly from the search results
+            - Do NOT invent or generate information that isn't present in the search results
+            - For each piece of information, cite which part of the search results it came from
+            - If you can't find certain information, explain what you looked for and why it might be missing
+            - Prioritize information that appears to come directly from the Amazon product page
+
+            Format your response as a valid JSON object with these keys: title, brand, bullets (array), description, reviews_raw (array), qna_raw (array).
+            """
+
+            # Call OpenAI with JSON response format for secondary extraction
+            secondary_extraction_response = call_openai_api(
+                prompt=secondary_extraction_prompt,
+                model=GPT_MODEL,
+                temperature=0.1,  # Even lower temperature for more factual extraction
+                response_format={"type": "json_object"}
+            )
+
+            # Parse the secondary response
+            secondary_extracted_data = json.loads(secondary_extraction_response)
+
+            # Merge the secondary data with our existing data, preferring the more complete information
+            for key in details:
+                if key in secondary_extracted_data:
+                    if key in ["title", "brand", "description"]:
+                        if details[key] == "Not Found" or (
+                            isinstance(secondary_extracted_data[key], str) and
+                            len(secondary_extracted_data[key]) > len(details[key])
+                        ):
+                            details[key] = secondary_extracted_data[key]
+                    elif key in ["bullets", "reviews_raw", "qna_raw"]:
+                        if not details[key] or (
+                            isinstance(secondary_extracted_data[key], list) and
+                            len(secondary_extracted_data[key]) > len(details[key])
+                        ):
+                            details[key] = secondary_extracted_data[key]
+                        elif isinstance(secondary_extracted_data[key], list) and details[key]:
+                            # Merge lists, removing duplicates
+                            combined = details[key] + secondary_extracted_data[key]
+                            # Remove duplicates while preserving order
+                            seen = set()
+                            details[key] = [x for x in combined if not (x.lower() in seen or seen.add(x.lower()))]
+
+        logger.info("Successfully extracted structured product information from web search results")
+
+        # Cache the results
+        CACHE[cache_key] = details
+        logger.info(f"Updated cache for {cache_key}")
+        return details
+
+    except Exception as e:
+        logger.error(f"Error during web search-based Amazon scraping for {url}: {e}")
+
+        # Try a simpler fallback approach if the main method fails
+        try:
+            logger.info(f"Attempting simplified web search fallback for {url}")
+
+            # Create a simpler query from the URL
+            simple_query = f"Amazon product {asin if asin else product_name} details reviews questions"
+
+            simple_prompt = f"""
+            I need comprehensive information about this Amazon product:
+            URL: {url}
+            {f"ASIN: {asin}" if asin else ""}
+            {f"Product Name: {product_name}" if product_name else ""}
+
+            Please search for this product and provide the following details in a structured format:
+            1. Complete Product Title
+            2. Brand Name
+            3. Key Features (at least 5 bullet points)
+            4. Detailed Product Description (at least 150 words)
+            5. Customer Reviews (at least 5 detailed reviews)
+            6. Customer Questions and Answers (at least 3 Q&A pairs)
+
+            For each piece of information, provide as much detail as possible. If you can't find certain information, indicate "Not Found" for that field.
+
+            Format as JSON with these keys: title, brand, bullets (array), description, reviews_raw (array), qna_raw (array).
+            """
+
+            simple_response = call_openai_api(
+                prompt=simple_prompt,
+                model=GPT_MODEL,
+                temperature=0.2,
+                response_format={"type": "json_object"}
+            )
+
+            simple_data = json.loads(simple_response)
+
+            # Update our details with the simplified data
+            for key, value in simple_data.items():
+                if key in details:
+                    details[key] = value
+
+            logger.info("Simplified web search fallback successful")
+
+        except Exception as simple_e:
+            logger.error(f"Simplified web search fallback also failed: {simple_e}")
+
+        # Cache whatever we have
+        CACHE[cache_key] = details
+        logger.info(f"Updated cache for {cache_key}")
+        return details
 
 async def enhanced_Web_Search_fallback(query: str, product_info: dict = None, amazon_url: str = None) -> dict:
     """
-    Enhanced fallback function that uses web search to gather product information
-    
+    Enhanced fallback function that uses a combination of web search and GPT-4
+    to gather comprehensive product information when scraping methods fail.
+
+    This implementation:
+    1. Specifically searches for the Amazon listing URL if provided
+    2. Uses targeted queries to gather different aspects of product information
+    3. Synthesizes information into a structured format
+
     Args:
-        query: Search query about the product
-        product_info: Any partial information already collected
-        amazon_url: The specific Amazon listing URL that failed to scrape properly
-        
+    query: Search query about the product
+    product_info: Any partial information already collected
+    amazon_url: The specific Amazon listing URL that failed to scrape properly
+
     Returns:
-        Dictionary containing product information
+    dict: Completed product information
     """
-    scraper = WebSearchScraper()
-    
+    logger.info(f"Using enhanced web search fallback for: {query}")
+
     # Initialize with any existing data or empty structure
     details = product_info or {
         "title": "Not Found", "brand": "Not Found", "bullets": [],
         "description": "Not Found", "reviews_raw": [], "qna_raw": []
     }
-    
-    try:
-        # Create targeted search queries
-        search_queries = [
-            f"product information from {amazon_url}" if amazon_url else query,
-            f"{query} product details specifications",
-            f"{amazon_url} customer reviews" if amazon_url else f"{query} product reviews customer feedback",
-            f"{amazon_url} questions and answers" if amazon_url else f"{query} common questions answers FAQ"
-        ]
-        
-        # Execute searches
-        all_results = []
-        for search_query in search_queries:
-            results = await scraper.search(search_query, num_results=5)
-            if results:
-                all_results.extend(results)
-        
-        if not all_results:
-            logger.warning(f"No search results found for query: {query}")
-            return details
-            
-        # Combine search results
-        combined_results = ""
-        for result in all_results:
-            combined_results += f"Title: {result.get('title', '')}\n"
-            combined_results += f"URL: {result.get('url', '')}\n"
-            combined_results += f"Content: {result.get('snippet', '')}\n\n"
-            
-        # Extract structured information
-        extraction_prompt = f"""
-        Based on the following web search results about a product, extract structured information in the requested format.
 
-        {f"Amazon Product URL: {amazon_url}" if amazon_url else f"Product Query: {query}"}
+    try:
+        # Step 1: Perform targeted searches
+        search_results = []
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        # First search: Direct Amazon URL search if available
+        if amazon_url:
+            logger.info(f"Searching specifically for Amazon listing: {amazon_url}")
+            amazon_specific_query = f"product information from {amazon_url}"
+
+            payload = {
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": "You are a helpful web search assistant."},
+                    {"role": "user", "content": f"Search for: {amazon_specific_query}"}
+                ],
+                "tools": [{
+                    "type": "Web Search",
+                    "function": {
+                        "name": "Web Search",
+                        "parameters": {}
+                    }
+                }],
+                "tool_choice": {"type": "function", "function": {"name": "Web Search"}}
+            }
+
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
+
+            if response.status_code == 200:
+                response_data = response.json()
+                tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+                if tool_calls:
+                    search_result = tool_calls[0]["function"].get("arguments", "{}")
+                    search_results.append(json.loads(search_result).get("search_results", ""))
+
+        # Second search: General product information if we don't have enough yet
+        if not amazon_url or details["title"] == "Not Found" or not details["bullets"]:
+            general_query = f"{query} product details specifications"
+            payload = {
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": "You are a helpful web search assistant."},
+                    {"role": "user", "content": f"Search for: {general_query}"}
+                ],
+                "tools": [{
+                    "type": "Web Search",
+                    "function": {
+                        "name": "Web Search",
+                        "parameters": {}
+                    }
+                }],
+                "tool_choice": {"type": "function", "function": {"name": "Web Search"}}
+            }
+
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
+
+            if response.status_code == 200:
+                response_data = response.json()
+                tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+                if tool_calls:
+                    search_result = tool_calls[0]["function"].get("arguments", "{}")
+                    search_results.append(json.loads(search_result).get("search_results", ""))
+
+        # Third search: Reviews and customer feedback
+        if details["reviews_raw"] == []:
+            # If we have an Amazon URL, specifically search for reviews of that product
+            reviews_query = f"{amazon_url} customer reviews" if amazon_url else f"{query} product reviews customer feedback"
+            payload["messages"][1]["content"] = f"Search for: {reviews_query}"
+
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
+
+            if response.status_code == 200:
+                response_data = response.json()
+                tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+                if tool_calls:
+                    search_result = tool_calls[0]["function"].get("arguments", "{}")
+                    search_results.append(json.loads(search_result).get("search_results", ""))
+
+        # Fourth search: Q&A and common questions
+        if details["qna_raw"] == []:
+            # If we have an Amazon URL, specifically search for Q&A of that product
+            qna_query = f"{amazon_url} questions and answers" if amazon_url else f"{query} common questions answers FAQ"
+            payload["messages"][1]["content"] = f"Search for: {qna_query}"
+
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
+
+            if response.status_code == 200:
+                response_data = response.json()
+                tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+                if tool_calls:
+                    search_result = tool_calls[0]["function"].get("arguments", "{}")
+                    search_results.append(json.loads(search_result).get("search_results", ""))
+
+        # Combine all search results
+        combined_search_results = "\n\n---\n\n".join([result for result in search_results if result])
+
+        # Process the combined search results to extract structured information
+        extraction_prompt = f"""
+        You are an expert product information extractor. Your task is to extract detailed, accurate product information from web search results.
+
+        SEARCH QUERY: {query}
+        {f"AMAZON URL: {amazon_url}" if amazon_url else ""}
 
         WEB SEARCH RESULTS:
-        {combined_results}
+        {combined_search_results}
 
-        Extract the following information:
-        1. Product Title (full and accurate)
-        2. Brand Name
-        3. Key Features/Bullet Points (list at least 5 if available)
-        4. Product Description (detailed, at least 100 words)
-        5. Sample Customer Reviews (3-5 if available)
-        6. Common Questions and Answers about the product (2-3 if available)
+        Extract the following information with high precision and detail:
 
-        For any information you can't find with high confidence, indicate "Not Found" rather than guessing.
+        1. Product Title (full and accurate, including brand and model number if available)
+        2. Brand Name (just the brand name without additional text like "by" or "from")
+        3. Key Features/Bullet Points (extract at least 5-8 if available, focusing on technical specifications, materials, dimensions, and key selling points)
+        4. Product Description (provide a detailed, comprehensive description that covers what the product is, how it works, and its benefits)
+        5. Customer Reviews (extract 5-10 detailed reviews that provide specific feedback about the product, including both positive and negative perspectives)
+        6. Questions and Answers (extract 3-5 detailed Q&A pairs that provide insights about common customer concerns or usage information)
+
+        IMPORTANT EXTRACTION GUIDELINES:
+        - For the title, extract the EXACT product title as it appears on the website
+        - For bullet points, maintain the original formatting and technical details, avoiding generic marketing language
+        - For the description, provide a comprehensive overview that includes technical details, use cases, and benefits
+        - For reviews, include the reviewer's rating if available (e.g., "5-star review:") and focus on detailed, specific feedback
+        - For Q&A, include complete questions and their corresponding answers
+        - If information is not available or unclear, indicate "Not Found" rather than guessing
+
         Format your response as a valid JSON object with these keys: title, brand, bullets (array), description, reviews_raw (array), qna_raw (array).
         """
-        
-        extraction_response = await scraper._call_openai_api(
+
+        # Call OpenAI with JSON response format
+        extraction_response = call_openai_api(
             prompt=extraction_prompt,
             model=GPT_MODEL,
-            temperature=0.3,
+            temperature=0.2,  # Lower temperature for more factual extraction
             response_format={"type": "json_object"}
         )
-        
+
         # Parse the response
         extracted_data = json.loads(extraction_response)
-        
-        # Update details with extracted data
-        for key, value in extracted_data.items():
-            if key in details:
-                # Only update if we don't have the data or it's a placeholder
-                if details[key] == "Not Found" or (isinstance(details[key], list) and not details[key]):
-                    details[key] = value
-                # For text fields, prefer longer, more detailed content
-                elif isinstance(value, str) and len(value) > len(details[key]) and details[key] != "Not Found":
-                    details[key] = value
-                # For lists, merge if both have content
-                elif isinstance(value, list) and isinstance(details[key], list) and value and details[key]:
-                    combined = details[key] + value
-                    # Remove duplicates while preserving order
-                    seen = set()
-                    details[key] = [x for x in combined if not (x in seen or seen.add(x))]
-        
-        logger.info("Enhanced web search fallback successful")
+
+        # Validate and clean the extracted data
+        if "title" in extracted_data and extracted_data["title"] and extracted_data["title"] != "Not Found":
+            details["title"] = extracted_data["title"]
+
+        if "brand" in extracted_data and extracted_data["brand"] and extracted_data["brand"] != "Not Found":
+            details["brand"] = extracted_data["brand"]
+
+        if "bullets" in extracted_data and isinstance(extracted_data["bullets"], list) and extracted_data["bullets"]:
+            # Clean bullet points - remove duplicates and empty entries
+            cleaned_bullets = []
+            seen_bullets = set()
+            for bullet in extracted_data["bullets"]:
+                # Normalize bullet text for deduplication
+                normalized = re.sub(r'\s+', ' ', bullet.lower().strip())
+                if normalized and normalized not in seen_bullets and len(normalized) > 5:
+                    cleaned_bullets.append(bullet)
+                    seen_bullets.add(normalized)
+            details["bullets"] = cleaned_bullets
+
+        if "description" in extracted_data and extracted_data["description"] and extracted_data["description"] != "Not Found":
+            details["description"] = extracted_data["description"]
+
+        if "reviews_raw" in extracted_data and isinstance(extracted_data["reviews_raw"], list) and extracted_data["reviews_raw"]:
+            # Clean reviews - remove duplicates and ensure they're substantial
+            cleaned_reviews = []
+            seen_reviews = set()
+            for review in extracted_data["reviews_raw"]:
+                # Normalize review text for deduplication
+                normalized = re.sub(r'\s+', ' ', review.lower().strip())
+                if normalized and normalized not in seen_reviews and len(normalized) > 20:
+                    cleaned_reviews.append(review)
+                    seen_reviews.add(normalized)
+            details["reviews_raw"] = cleaned_reviews
+
+        if "qna_raw" in extracted_data and isinstance(extracted_data["qna_raw"], list) and extracted_data["qna_raw"]:
+            # Clean Q&A - ensure they're in Q&A format and substantial
+            cleaned_qna = []
+            for qna in extracted_data["qna_raw"]:
+                if ("Q:" in qna or "Question:" in qna) and ("A:" in qna or "Answer:" in qna) and len(qna) > 20:
+                    cleaned_qna.append(qna)
+                elif "?" in qna and len(qna) > 20:
+                    # Try to format as Q&A if it contains a question mark
+                    parts = qna.split("?", 1)
+                    if len(parts) == 2:
+                        formatted_qna = f"Q: {parts[0]}? A: {parts[1].strip()}"
+                        cleaned_qna.append(formatted_qna)
+            details["qna_raw"] = cleaned_qna
+
+        logger.info("Successfully extracted structured product information from web search results")
         return details
-        
+
     except Exception as e:
-        logger.error(f"Enhanced web search fallback failed: {e}")
+        logger.error(f"Error during enhanced web search fallback: {e}")
         return details
 
 # --- GPT UTILITY FUNCTIONS ---
