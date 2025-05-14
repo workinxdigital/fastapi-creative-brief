@@ -792,16 +792,17 @@ async def scrape_website_text(url: str) -> str:
     scraper = WebSearchScraper()
     return await scraper.scrape_website(url)
 
-async def scrape_amazon_listing_details(url: str) -> dict:
+async def scrape_amazon_listing_details(url: str, include_storefront: bool = False) -> dict:
     """
     Scrapes product details from an Amazon listing URL using web search.
     Uses OpenAI's web search capability to extract comprehensive product information.
 
     Args:
     url: The Amazon product listing URL
+    include_storefront: Whether to also extract storefront information
 
     Returns:
-    dict: Product details including title, brand, bullets, description, reviews, and Q&A
+    dict: Product details including title, brand, bullets, description, reviews, Q&A, and storefront data if requested
     """
     logger.info(f"Attempting to scrape Amazon listing via web search: {url}")
 
@@ -812,7 +813,8 @@ async def scrape_amazon_listing_details(url: str) -> dict:
         "bullets": [],
         "description": "Not Found",
         "reviews_raw": [],
-        "qna_raw": []
+        "qna_raw": [],
+        "storefront_data": None  # Add storefront data field
     }
 
     # Check cache first
@@ -824,6 +826,7 @@ async def scrape_amazon_listing_details(url: str) -> dict:
     # Extract ASIN and product name from URL for better search
     asin = None
     product_name = ""
+    brand_name = ""
 
     # Extract ASIN using regex patterns
     if "/dp/" in url:
@@ -849,9 +852,15 @@ async def scrape_amazon_listing_details(url: str) -> dict:
             product_name = part.replace('-', ' ')
             break
 
+    # Extract potential brand name
+    if "brand=" in url:
+        brand_parts = url.lower().split("brand=")
+        if len(brand_parts) > 1:
+            brand_name = brand_parts[1].split("&")[0].replace("+", " ")
+
     logger.info(f"Extracted ASIN: {asin if asin else 'None'}")
     logger.info(f"Extracted product name: {product_name}")
-    logger.info(f"Extracted potential brand: {product_name.split()[0] if product_name else ''}")
+    logger.info(f"Extracted potential brand: {brand_name if brand_name else product_name.split()[0] if product_name else ''}")
 
     # Prepare for web search
     headers = {
@@ -953,13 +962,15 @@ async def scrape_amazon_listing_details(url: str) -> dict:
                 logger.info("Successfully retrieved product Q&A")
 
         # Step 5: Search for brand information
-        if "brand" in url.lower() or product_name:
+        potential_brand = ""
+        if brand_name or "brand" in url.lower() or product_name:
             # Try to extract brand from URL or product name
-            potential_brand = ""
-            if "brand" in url.lower():
+            potential_brand = brand_name
+
+            if not potential_brand and "brand" in url.lower():
                 brand_parts = url.lower().split("brand=")
                 if len(brand_parts) > 1:
-                    potential_brand = brand_parts[1].split("&")[0]
+                    potential_brand = brand_parts[1].split("&")[0].replace("+", " ")
 
             if not potential_brand and product_name:
                 # Take first 1-2 words as potential brand
@@ -986,7 +997,34 @@ async def scrape_amazon_listing_details(url: str) -> dict:
                         search_results.append(json.loads(search_result).get("search_results", ""))
                         logger.info(f"Successfully retrieved brand information for {potential_brand}")
 
-        # Step 6: Process all search results with GPT-4 to extract structured information
+        # Step 6: If storefront extraction is requested, search for brand storefront
+        storefront_data = None
+        if include_storefront and potential_brand:
+            logger.info(f"Extracting storefront data for brand: {potential_brand}")
+
+            storefront_query = f"amazon {potential_brand} brand store storefront page"
+
+            payload["messages"][1]["content"] = f"Search for: {storefront_query}"
+
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
+
+            if response.status_code == 200:
+                response_data = response.json()
+                tool_calls = response_data["choices"][0]["message"].get("tool_calls", [])
+                if tool_calls:
+                    search_result = tool_calls[0]["function"].get("arguments", "{}")
+                    storefront_results = json.loads(search_result).get("search_results", "")
+
+                    # Process storefront results
+                    storefront_data = await _extract_storefront_data(potential_brand, storefront_results)
+                    details["storefront_data"] = storefront_data
+                    logger.info(f"Successfully extracted storefront data for {potential_brand}")
+
+        # Step 7: Process all search results with GPT-4 to extract structured information
         combined_search_results = "\n\n---\n\n".join([result for result in search_results if result])
 
         extraction_prompt = f"""
@@ -995,6 +1033,7 @@ async def scrape_amazon_listing_details(url: str) -> dict:
         Amazon Product URL: {url}
         {f"Amazon ASIN: {asin}" if asin else ""}
         {f"Product Name: {product_name}" if product_name else ""}
+        {f"Brand Name: {brand_name}" if brand_name else ""}
 
         WEB SEARCH RESULTS:
         {combined_search_results}
@@ -1007,6 +1046,8 @@ async def scrape_amazon_listing_details(url: str) -> dict:
         4. Product Description (provide a detailed, comprehensive description that covers what the product is, how it works, and its benefits)
         5. Customer Reviews (extract 5-10 detailed reviews that provide specific feedback about the product, including both positive and negative perspectives)
         6. Questions and Answers (extract 3-5 detailed Q&A pairs that provide insights about common customer concerns or usage information)
+        7. Technical Details (extract technical specifications in a structured format, including dimensions, weight, materials, compatibility, etc.)
+        8. Enhanced Content (extract any A+ content, comparison charts, or brand story sections)
 
         IMPORTANT EXTRACTION GUIDELINES:
         - For the title, extract the EXACT product title as it appears on Amazon, including all model numbers and specifications
@@ -1014,10 +1055,13 @@ async def scrape_amazon_listing_details(url: str) -> dict:
         - For the description, provide a comprehensive overview that includes technical details, use cases, and benefits
         - For reviews, include the reviewer's rating if available (e.g., "5-star review:") and focus on detailed, specific feedback
         - For Q&A, include complete questions and their corresponding answers
+        - For technical details, organize them into a structured format with clear labels
+        - For enhanced content, capture any special product presentations, comparison charts, or brand storytelling
         - If information is not available or unclear, indicate "Not Found" rather than guessing
         - Ensure all extracted information is specific to THIS product, not similar or related products
 
-        Format your response as a valid JSON object with these keys: title, brand, bullets (array), description, reviews_raw (array), qna_raw (array).
+        Format your response as a valid JSON object with these keys:
+        title, brand, bullets (array), description, reviews_raw (array), qna_raw (array), technical_details (object), enhanced_content.
         """
 
         # Call OpenAI with JSON response format
@@ -1031,137 +1075,20 @@ async def scrape_amazon_listing_details(url: str) -> dict:
         # Parse the response
         extracted_data = json.loads(extraction_response)
 
-        # Validate and clean the extracted data
-        if "title" in extracted_data and extracted_data["title"] and extracted_data["title"] != "Not Found":
-            details["title"] = extracted_data["title"]
+        # Update details with extracted data
+        for key in extracted_data:
+            if key in details and extracted_data[key]:
+                details[key] = extracted_data[key]
 
-        if "brand" in extracted_data and extracted_data["brand"] and extracted_data["brand"] != "Not Found":
-            details["brand"] = extracted_data["brand"]
+        # Add additional fields if they exist in extracted data
+        if "technical_details" in extracted_data and extracted_data["technical_details"]:
+            details["technical_details"] = extracted_data["technical_details"]
 
-        if "bullets" in extracted_data and isinstance(extracted_data["bullets"], list) and extracted_data["bullets"]:
-            # Clean bullet points - remove duplicates and empty entries
-            cleaned_bullets = []
-            seen_bullets = set()
-            for bullet in extracted_data["bullets"]:
-                # Normalize bullet text for deduplication
-                normalized = re.sub(r'\s+', ' ', bullet.lower().strip())
-                if normalized and normalized not in seen_bullets and len(normalized) > 5:
-                    cleaned_bullets.append(bullet)
-                    seen_bullets.add(normalized)
-            details["bullets"] = cleaned_bullets
+        if "enhanced_content" in extracted_data and extracted_data["enhanced_content"]:
+            details["enhanced_content"] = extracted_data["enhanced_content"]
 
-        if "description" in extracted_data and extracted_data["description"] and extracted_data["description"] != "Not Found":
-            details["description"] = extracted_data["description"]
-
-        if "reviews_raw" in extracted_data and isinstance(extracted_data["reviews_raw"], list) and extracted_data["reviews_raw"]:
-            # Clean reviews - remove duplicates and ensure they're substantial
-            cleaned_reviews = []
-            seen_reviews = set()
-            for review in extracted_data["reviews_raw"]:
-                # Normalize review text for deduplication
-                normalized = re.sub(r'\s+', ' ', review.lower().strip())
-                if normalized and normalized not in seen_reviews and len(normalized) > 20:
-                    cleaned_reviews.append(review)
-                    seen_reviews.add(normalized)
-            details["reviews_raw"] = cleaned_reviews
-
-        if "qna_raw" in extracted_data and isinstance(extracted_data["qna_raw"], list) and extracted_data["qna_raw"]:
-            # Clean Q&A - ensure they're in Q&A format and substantial
-            cleaned_qna = []
-            for qna in extracted_data["qna_raw"]:
-                if ("Q:" in qna or "Question:" in qna) and ("A:" in qna or "Answer:" in qna) and len(qna) > 20:
-                    cleaned_qna.append(qna)
-                elif "?" in qna and len(qna) > 20:
-                    # Try to format as Q&A if it contains a question mark
-                    parts = qna.split("?", 1)
-                    if len(parts) == 2:
-                        formatted_qna = f"Q: {parts[0]}? A: {parts[1].strip()}"
-                        cleaned_qna.append(formatted_qna)
-            details["qna_raw"] = cleaned_qna
-
-        # Check if we have sufficient data
-        data_quality_score = 0
-        if details["title"] != "Not Found":
-            data_quality_score += 1
-        if details["brand"] != "Not Found":
-            data_quality_score += 1
-        if len(details["bullets"]) >= 3:
-            data_quality_score += 1
-        if details["description"] != "Not Found" and len(details["description"]) > 100:
-            data_quality_score += 1
-        if len(details["reviews_raw"]) >= 3:
-            data_quality_score += 1
-        if len(details["qna_raw"]) >= 2:
-            data_quality_score += 1
-
-        # If data quality is poor, try a second extraction with a different approach
-        if data_quality_score < 4:
-            logger.info(f"Initial data quality score is {data_quality_score}/6. Attempting secondary extraction.")
-
-            # Try a more focused extraction approach
-            secondary_extraction_prompt = f"""
-            You are an expert Amazon product data extractor. I need you to extract detailed product information from these search results about an Amazon product.
-
-            Product URL: {url}
-            {f"ASIN: {asin}" if asin else ""}
-            {f"Product Name: {product_name}" if product_name else ""}
-
-            SEARCH RESULTS:
-            {combined_search_results}
-
-            Your task is to carefully analyze these search results and extract the following information:
-
-            1. TITLE: The exact, complete product title as it appears on Amazon
-            2. BRAND: The company that makes this product (just the name)
-            3. BULLETS: 5-8 key feature bullet points that appear on the Amazon listing
-            4. DESCRIPTION: A detailed product description (at least 150 words)
-            5. REVIEWS: 5-10 actual customer reviews with their ratings if available
-            6. Q&A: 3-5 actual customer questions and their answers
-
-            EXTRACTION GUIDELINES:
-            - Focus on extracting FACTUAL information directly from the search results
-            - Do NOT invent or generate information that isn't present in the search results
-            - For each piece of information, cite which part of the search results it came from
-            - If you can't find certain information, explain what you looked for and why it might be missing
-            - Prioritize information that appears to come directly from the Amazon product page
-
-            Format your response as a valid JSON object with these keys: title, brand, bullets (array), description, reviews_raw (array), qna_raw (array).
-            """
-
-            # Call OpenAI with JSON response format for secondary extraction
-            secondary_extraction_response = call_openai_api(
-                prompt=secondary_extraction_prompt,
-                model=GPT_MODEL,
-                temperature=0.1,  # Even lower temperature for more factual extraction
-                response_format={"type": "json_object"}
-            )
-
-            # Parse the secondary response
-            secondary_extracted_data = json.loads(secondary_extraction_response)
-
-            # Merge the secondary data with our existing data, preferring the more complete information
-            for key in details:
-                if key in secondary_extracted_data:
-                    if key in ["title", "brand", "description"]:
-                        if details[key] == "Not Found" or (
-                            isinstance(secondary_extracted_data[key], str) and
-                            len(secondary_extracted_data[key]) > len(details[key])
-                        ):
-                            details[key] = secondary_extracted_data[key]
-                    elif key in ["bullets", "reviews_raw", "qna_raw"]:
-                        if not details[key] or (
-                            isinstance(secondary_extracted_data[key], list) and
-                            len(secondary_extracted_data[key]) > len(details[key])
-                        ):
-                            details[key] = secondary_extracted_data[key]
-                        elif isinstance(secondary_extracted_data[key], list) and details[key]:
-                            # Merge lists, removing duplicates
-                            combined = details[key] + secondary_extracted_data[key]
-                            # Remove duplicates while preserving order
-                            seen = set()
-                            details[key] = [x for x in combined if not (x.lower() in seen or seen.add(x.lower()))]
-
-        logger.info("Successfully extracted structured product information from web search results")
+        # Clean and validate the data
+        details = _clean_amazon_data(details)
 
         # Cache the results
         CACHE[cache_key] = details
@@ -1191,10 +1118,12 @@ async def scrape_amazon_listing_details(url: str) -> dict:
             4. Detailed Product Description (at least 150 words)
             5. Customer Reviews (at least 5 detailed reviews)
             6. Customer Questions and Answers (at least 3 Q&A pairs)
+            7. Technical Details (specifications, dimensions, materials)
+            8. Enhanced Content (A+ content or brand storytelling elements)
 
             For each piece of information, provide as much detail as possible. If you can't find certain information, indicate "Not Found" for that field.
 
-            Format as JSON with these keys: title, brand, bullets (array), description, reviews_raw (array), qna_raw (array).
+            Format as JSON with these keys: title, brand, bullets (array), description, reviews_raw (array), qna_raw (array), technical_details (object), enhanced_content.
             """
 
             simple_response = call_openai_api(
@@ -1220,6 +1149,133 @@ async def scrape_amazon_listing_details(url: str) -> dict:
         CACHE[cache_key] = details
         logger.info(f"Updated cache for {cache_key}")
         return details
+
+async def _extract_storefront_data(brand_name: str, storefront_results: str) -> dict:
+    """
+    Extract Amazon storefront information for a brand
+
+    Args:
+    brand_name: The brand name to extract storefront data for
+    storefront_results: Search results related to the brand storefront
+
+    Returns:
+    Dictionary containing structured storefront information
+    """
+    logger.info(f"Processing storefront data for brand: {brand_name}")
+
+    # Find potential storefront URL
+    storefront_url = None
+    for line in storefront_results.split('\n'):
+        if "amazon.com/stores" in line or "amazon.com/shop" in line:
+            url_match = re.search(r'https?://(?:www\.)?amazon\.com/(?:stores|shop)/[^\s"\']+', line)
+            if url_match:
+                storefront_url = url_match.group(0)
+                break
+
+    storefront_prompt = f"""
+    You are an expert Amazon brand storefront analyst. Extract comprehensive information about this brand's Amazon storefront.
+
+    Brand Name: {brand_name}
+    Storefront URL: {storefront_url if storefront_url else "Not explicitly found in search results"}
+
+    SEARCH RESULTS:
+    {storefront_results}
+
+    Extract the following information about the brand's Amazon storefront:
+
+    1. Brand Overview: A comprehensive summary of what the brand is about, its positioning, and its market focus
+    2. Brand Mission/Values: Any stated mission, values, or commitments the brand makes
+    3. Featured Products: Key product categories or flagship products highlighted in the storefront
+    4. Brand Story: Any narrative about the brand's history, founding, or journey
+    5. Visual Elements: Description of the brand's visual identity, imagery themes, and aesthetic
+    6. Special Promotions: Any current promotions, deals, or special offerings
+    7. Customer Testimonials: Any highlighted customer feedback or testimonials specific to the brand
+    8. Brand Differentiators: What makes this brand stand out from competitors based on their storefront
+
+    If certain information isn't available in the search results, indicate "Not Found" for that section.
+    Format your response as a valid JSON object with these keys:
+    overview, mission_values, featured_products (array), brand_story, visual_elements, promotions, testimonials (array), differentiators (array).
+    """
+
+    try:
+        storefront_response = call_openai_api(
+            prompt=storefront_prompt,
+            model=GPT_MODEL,
+            temperature=0.3,
+            response_format={"type": "json_object"}
+        )
+
+        storefront_data = json.loads(storefront_response)
+
+        # Add the storefront URL if found
+        if storefront_url:
+            storefront_data["storefront_url"] = storefront_url
+
+        return storefront_data
+
+    except Exception as e:
+        logger.error(f"Error extracting storefront data: {e}")
+        return {
+            "overview": "Not Found",
+            "mission_values": "Not Found",
+            "featured_products": [],
+            "brand_story": "Not Found",
+            "visual_elements": "Not Found",
+            "promotions": "Not Found",
+            "testimonials": [],
+            "differentiators": [],
+            "storefront_url": storefront_url if storefront_url else "Not Found"
+        }
+
+def _clean_amazon_data(details: dict) -> dict:
+    """
+    Clean and validate Amazon product data
+
+    Args:
+    details: Raw extracted product details
+
+    Returns:
+    Cleaned and validated product details
+    """
+    # Clean bullet points - remove duplicates and empty entries
+    if "bullets" in details and isinstance(details["bullets"], list):
+        cleaned_bullets = []
+        seen_bullets = set()
+        for bullet in details["bullets"]:
+            # Normalize bullet text for deduplication
+            normalized = re.sub(r'\s+', ' ', str(bullet).lower().strip())
+            if normalized and normalized not in seen_bullets and len(normalized) > 5:
+                cleaned_bullets.append(bullet)
+                seen_bullets.add(normalized)
+        details["bullets"] = cleaned_bullets
+
+    # Clean reviews - remove duplicates and ensure they're substantial
+    if "reviews_raw" in details and isinstance(details["reviews_raw"], list):
+        cleaned_reviews = []
+        seen_reviews = set()
+        for review in details["reviews_raw"]:
+            # Normalize review text for deduplication
+            normalized = re.sub(r'\s+', ' ', str(review).lower().strip())
+            if normalized and normalized not in seen_reviews and len(normalized) > 20:
+                cleaned_reviews.append(review)
+                seen_reviews.add(normalized)
+        details["reviews_raw"] = cleaned_reviews
+
+    # Clean Q&A - ensure they're in Q&A format and substantial
+    if "qna_raw" in details and isinstance(details["qna_raw"], list):
+        cleaned_qna = []
+        for qna in details["qna_raw"]:
+            if ("Q:" in str(qna) or "Question:" in str(qna)) and ("A:" in str(qna) or "Answer:" in str(qna)) and len(str(qna)) > 20:
+                cleaned_qna.append(qna)
+            elif "?" in str(qna) and len(str(qna)) > 20:
+                # Try to format as Q&A if it contains a question mark
+                parts = str(qna).split("?", 1)
+                if len(parts) == 2:
+                    formatted_qna = f"Q: {parts[0]}? A: {parts[1].strip()}"
+                    cleaned_qna.append(formatted_qna)
+        details["qna_raw"] = cleaned_qna
+
+    return details
 
 async def enhanced_Web_Search_fallback(query: str, product_info: dict = None, amazon_url: str = None) -> dict:
     """
