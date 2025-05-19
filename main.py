@@ -22,7 +22,7 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, PageBreak
 from sqlmodel import Field, Session, SQLModel, create_engine
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from dotenv import load_dotenv
@@ -72,6 +72,28 @@ GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4")
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 BRAND_GUIDELINES_DIR = os.getenv("BRAND_GUIDELINES_DIR", "brand_guidelines")
 PDF_EXPORTS_DIR = os.getenv("PDF_EXPORTS_DIR", "pdf_exports")
+
+# PDF Heading Constants - Add these lines
+# PDF Heading Constants
+MAIN_HEADINGS = {
+    "TITLE": "Creative Brief",
+    "ASSETS_OVERVIEW": "ASSETS OVERVIEW",
+    "PROJECT_OVERVIEW": "PROJECT OVERVIEW",
+    "PRODUCT_SNAPSHOT": "PRODUCT SNAPSHOT",
+    "CURRENT_LISTING_CHALLENGES": "CURRENT LISTING CHALLENGES",
+    "TARGET_CUSTOMER": "TARGET CUSTOMER DEEP DIVE",
+    "BARRIERS_TO_PURCHASE": "BARRIERS TO PURCHASE",
+    "BRAND_VOICE": "BRAND VOICE & TONE",
+    "USPS": "USPs (UNIQUE SELLING PROPOSITIONS)",
+    "WOW_FACTOR": "5-SECOND WOW FACTOR",
+    "KEY_FEATURES": "KEY FEATURES (WITH CONTEXT)",
+    "TOP_SELLING_POINTS": "TOP 6 SELLING POINTS (WITH STRATEGIC JUSTIFICATION)",
+    "COMPETITIVE_LANDSCAPE": "COMPETITIVE LANDSCAPE",
+    "SEARCH_KEYWORDS": "SEARCH & KEYWORDS STRATEGY",
+    "BRAND_STORY": "BRAND STORY, VALUES & PURPOSE",
+    "DESIGN_DIRECTION": "DESIGN DIRECTION",
+    "FINAL_NOTES": "FINAL NOTES & STRATEGIC CALLOUTS"
+}
 
 # Initialize OpenAI
 import openai
@@ -2014,24 +2036,98 @@ def generate_pdf_in_background(session_id: int, project_name: str):
         if not session:
             logger.error(f"Session {session_id} not found for PDF generation.")
             return
+
         safe_filename_base = sanitize_filename(project_name)
         pdf_filename = f"{safe_filename_base}.pdf"
         pdf_path = os.path.join(PDF_EXPORTS_DIR, pdf_filename)
+
         try:
-            doc = SimpleDocTemplate(pdf_path, pagesize=LETTER, rightMargin=inch*0.75, leftMargin=inch*0.75, topMargin=inch*0.75, bottomMargin=inch*0.75)
+            # Create document with better margins
+            doc = SimpleDocTemplate(
+                pdf_path,
+                pagesize=LETTER,
+                rightMargin=inch*0.75,
+                leftMargin=inch*0.75,
+                topMargin=inch*0.75,
+                bottomMargin=inch*0.75
+            )
+
             story = []
             styles = getSampleStyleSheet()
-            h1_style = ParagraphStyle(name='H1Style', parent=styles['h1'], fontSize=16, spaceAfter=14, fontName='Helvetica-Bold')
-            h2_style = ParagraphStyle(name='H2Style', parent=styles['h2'], fontSize=12, spaceAfter=10, spaceBefore=10, fontName='Helvetica-Bold')
-            question_style = ParagraphStyle(name='QuestionStyle', parent=styles['Normal'], fontSize=10, fontName='Helvetica-Bold', spaceAfter=2)
-            answer_style = ParagraphStyle(name='AnswerStyle', parent=styles['Normal'], fontSize=10, fontName='Helvetica', leftIndent=10, spaceAfter=10)
-            body_style = ParagraphStyle(name='BodyStyle', parent=styles['Normal'], fontSize=10, leading=14, spaceAfter=10, fontName='Helvetica', alignment=TA_LEFT)
 
-            story.append(Paragraph(f"Creative Brief: {project_name}", h1_style))
-            story.append(Spacer(1, 0.2 * inch))
+            # Create better styled paragraph formats
+            title_style = ParagraphStyle(
+                name='TitleStyle',
+                parent=styles['Title'],
+                fontSize=20,
+                spaceAfter=16,
+                fontName='Helvetica-Bold',
+                alignment=1  # Center alignment
+            )
 
+            h1_style = ParagraphStyle(
+                name='H1Style',
+                parent=styles['Heading1'],
+                fontSize=16,
+                spaceAfter=14,
+                spaceBefore=20,
+                fontName='Helvetica-Bold',
+                textColor='#333333'
+            )
+
+            h2_style = ParagraphStyle(
+                name='H2Style',
+                parent=styles['Heading2'],
+                fontSize=14,
+                spaceAfter=10,
+                spaceBefore=16,
+                fontName='Helvetica-Bold',
+                textColor='#444444'
+            )
+
+            question_style = ParagraphStyle(
+                name='QuestionStyle',
+                parent=styles['Normal'],
+                fontSize=12,
+                fontName='Helvetica-Bold',
+                spaceAfter=4,
+                spaceBefore=10,
+                textColor='#333333'
+            )
+
+            answer_style = ParagraphStyle(
+                name='AnswerStyle',
+                parent=styles['Normal'],
+                fontSize=11,
+                fontName='Helvetica',
+                leftIndent=20,
+                spaceAfter=12,
+                leading=14  # Line spacing
+            )
+
+            # Add title page
+            story.append(Paragraph(f"Creative Brief: {project_name}", title_style))
+            story.append(Spacer(1, 0.3 * inch))
+
+            # Add date
+            from datetime import datetime
+            current_date = datetime.now().strftime("%B %d, %Y")
+            date_style = ParagraphStyle(
+                name='DateStyle',
+                parent=styles['Normal'],
+                fontSize=11,
+                alignment=1  # Center alignment
+            )
+            story.append(Paragraph(f"Generated on {current_date}", date_style))
+            story.append(Spacer(1, 0.5 * inch))
+
+            # Add page break after title page
+            story.append(PageBreak())
+
+            # Process assets section
             inputs = json.loads(session.brand_input) if session.brand_input else {}
-            story.append(Paragraph("ASSETS OVERVIEW", h2_style))
+            story.append(Paragraph(MAIN_HEADINGS["ASSETS_OVERVIEW"], h2_style))
+
             if inputs.get("has_assets", True):
                 asset_fields = [
                     ("White Background Image Link", "white_background_image"),
@@ -2040,34 +2136,91 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                     ("User-Generated Content Link", "user_generated_content"),
                     ("Video Content Link", "video_content"),
                 ]
+
                 any_asset = False
                 for label, key in asset_fields:
                     value = inputs.get(key, "")
                     if value:
                         any_asset = True
-                        story.append(Paragraph(f"<b>{label}:</b> {value}", body_style))
-                if not any_asset:
-                    story.append(Paragraph("No asset links provided.", body_style))
-            else:
-                story.append(Paragraph("No assets provided.", body_style))
+                        story.append(Paragraph(f"<b>{label}:</b>", question_style))
+                        story.append(Paragraph(f"{value}", answer_style))
 
+                if not any_asset:
+                    story.append(Paragraph("No asset links provided.", answer_style))
+            else:
+                story.append(Paragraph("No assets provided.", answer_style))
+
+            story.append(Spacer(1, 0.2 * inch))
+
+            # Process each section with better formatting
             sections = json.loads(session.form_data) if session.form_data else []
+
             for section in sections:
                 heading = section.get("title", "Untitled Section")
-                story.append(Paragraph(heading.upper(), h2_style))
+
+                # Check if this is a main heading (all caps in your React code)
+                if heading in MAIN_HEADINGS:
+                    story.append(Paragraph(heading, h1_style))
+                else:
+                    story.append(Paragraph(heading, h2_style))
+
                 if "questions" in section and isinstance(section["questions"], list):
                     for qa in section["questions"]:
                         q = qa.get("question", "")
                         a = qa.get("answer", "N/A")
+
                         if q:
                             story.append(Paragraph(q, question_style))
-                            story.append(Paragraph(a.replace("\n", "<br />"), answer_style))
-                    story.append(Spacer(1, 0.1 * inch))
 
+                            # Process answer text to handle bullet points and formatting
+                            processed_answer = process_answer_text(a)
+                            story.append(Paragraph(processed_answer, answer_style))
+
+                story.append(Spacer(1, 0.2 * inch))
+
+            # Build the PDF
             doc.build(story)
             logger.info(f"PDF generated at {pdf_path} for session {session_id}.")
+
         except Exception as e:
             logger.error(f"Error generating PDF for session {session_id}: {e}")
+
+def process_answer_text(text):
+    """Process answer text to handle bullet points and formatting properly"""
+    if not text:
+        return ""
+
+    # Replace markdown-style bullet points with HTML bullets
+    lines = text.split('\n')
+    processed_lines = []
+
+    for line in lines:
+        # Handle bullet points (*, -, •)
+        line = line.strip()
+        if line.startswith('* ') or line.startswith('- ') or line.startswith('• '):
+            # Convert to HTML bullet
+            processed_line = f"&#8226; {line[2:].strip()}"
+            processed_lines.append(processed_line)
+        elif line.startswith('1. ') or line.startswith('2. ') or line.startswith('3. '):
+            # Handle numbered lists
+            num, content = line.split('. ', 1)
+            processed_line = f"{num}. {content.strip()}"
+            processed_lines.append(processed_line)
+        else:
+            processed_lines.append(line)
+
+    # Join lines with HTML line breaks
+    processed_text = "<br/>".join(processed_lines)
+
+    # Handle bold text (** or __)
+    processed_text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', processed_text)
+    processed_text = re.sub(r'__(.*?)__', r'<b>\1</b>', processed_text)
+
+    # Handle italic text (* or _)
+    processed_text = re.sub(r'\*(.*?)\*', r'<i>\1</i>', processed_text)
+    processed_text = re.sub(r'_(.*?)_', r'<i>\1</i>', processed_text)
+
+    return processed_text
 
 def upload_to_drive(file_path: str, filename: str):
     try:
