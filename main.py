@@ -2031,6 +2031,9 @@ Generate the JSON output now:
         return json.dumps({"editable_sections": [{"title": "Error", "questions": [{"question": "Generation Failed", "answer": str(e)}]}]})
 
 # --- BACKGROUND TASKS ---
+# Define the bright green color from the screenshot
+BRIGHT_GREEN = colors.HexColor('#b5fb6f')
+
 def process_answer_text(text):
     """Process answer text to handle bullet points and formatting properly"""
     if not text:
@@ -2067,7 +2070,7 @@ def process_answer_text(text):
     processed_text = re.sub(r'_(.*?)_', r'<i>\1</i>', processed_text)
 
     return processed_text
-    
+
 def generate_pdf_in_background(session_id: int, project_name: str):
     logger.info(f"Generating PDF for session {session_id} in background.")
     with Session(engine) as db:
@@ -2119,45 +2122,50 @@ def generate_pdf_in_background(session_id: int, project_name: str):
             story = []
             styles = getSampleStyleSheet()
 
-            # Create better styled paragraph formats with white text for black background
+            # Create better styled paragraph formats with consistent indentation
             title_style = ParagraphStyle(
                 name='TitleStyle',
                 parent=styles['Title'],
                 fontSize=20,
-                spaceAfter=16,
+                spaceAfter=24,  # Increased spacing after title
                 fontName='Helvetica-Bold',
                 alignment=1,  # Center alignment
                 textColor=colors.white
             )
 
+            # Main heading style with bright green color
             h1_style = ParagraphStyle(
                 name='H1Style',
                 parent=styles['Heading1'],
                 fontSize=16,
-                spaceAfter=14,
-                spaceBefore=20,
+                spaceAfter=16,  # Increased spacing after main headings
+                spaceBefore=24,  # Increased spacing before main headings
                 fontName='Helvetica-Bold',
-                textColor=colors.white
+                textColor=BRIGHT_GREEN,  # Using the bright green color
+                leftIndent=20  # Consistent indentation
             )
 
             h2_style = ParagraphStyle(
                 name='H2Style',
                 parent=styles['Heading2'],
                 fontSize=14,
-                spaceAfter=10,
-                spaceBefore=16,
+                spaceAfter=12,
+                spaceBefore=18,
                 fontName='Helvetica-Bold',
-                textColor=colors.white
+                textColor=colors.white,
+                leftIndent=20  # Consistent indentation
             )
 
+            # Question style with bright green color
             question_style = ParagraphStyle(
                 name='QuestionStyle',
                 parent=styles['Normal'],
                 fontSize=12,
                 fontName='Helvetica-Bold',
-                spaceAfter=4,
-                spaceBefore=10,
-                textColor=colors.white
+                spaceAfter=6,  # Increased spacing after questions
+                spaceBefore=12,  # Increased spacing before questions
+                textColor=BRIGHT_GREEN,  # Using the bright green color
+                leftIndent=40  # Consistent indentation, indented from main headings
             )
 
             answer_style = ParagraphStyle(
@@ -2165,10 +2173,11 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 parent=styles['Normal'],
                 fontSize=11,
                 fontName='Helvetica',
-                leftIndent=20,
-                spaceAfter=12,
+                spaceAfter=14,  # Increased spacing after answers
                 leading=14,  # Line spacing
-                textColor=colors.white
+                textColor=colors.white,
+                leftIndent=40,  # Same indentation as questions for alignment
+                firstLineIndent=0  # No first line indent
             )
 
             # Special style for target customer section
@@ -2177,8 +2186,9 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 parent=styles['Normal'],
                 fontSize=11,
                 fontName='Helvetica',
-                spaceAfter=2,
-                textColor=colors.white
+                spaceAfter=4,  # Less spacing between these items
+                textColor=colors.white,
+                leftIndent=40  # Same indentation as questions for alignment
             )
 
             # Add title page
@@ -2231,7 +2241,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
             else:
                 story.append(Paragraph("No assets provided.", answer_style))
 
-            story.append(Spacer(1, 0.2 * inch))
+            story.append(Spacer(1, 0.3 * inch))  # Consistent spacing between sections
 
             # Process each section with better formatting
             sections = json.loads(session.form_data) if session.form_data else []
@@ -2269,6 +2279,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                         story.append(Paragraph(f"location = {demographics.get('location', 'United States')}", target_customer_style))
                         story.append(Paragraph(f"income = {demographics.get('income', 'high income')}", target_customer_style))
                         story.append(Paragraph(f"profession = {demographics.get('profession', 'engaged in regular tennis activities')}", target_customer_style))
+                        story.append(Spacer(1, 0.1 * inch))  # Small space after demographics
 
                         # Add other questions if any
                         question_number = 1
@@ -2301,6 +2312,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                     question_number += 1
 
                     section_number += 1
+                    story.append(Spacer(1, 0.3 * inch))  # Consistent spacing between sections
                 else:
                     # For non-main headings
                     story.append(Paragraph(heading, h2_style))
@@ -2315,7 +2327,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                 processed_answer = process_answer_text(a)
                                 story.append(Paragraph(processed_answer, answer_style))
 
-                story.append(Spacer(1, 0.2 * inch))
+                    story.append(Spacer(1, 0.2 * inch))  # Slightly less spacing for sub-sections
 
             # Function to draw the black background
             def on_page(canvas, doc):
