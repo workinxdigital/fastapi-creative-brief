@@ -806,15 +806,32 @@ async def scrape_website(self, url: str) -> str:
 async def scrape_website_text(url: str) -> str:
     """
     Scrape text content from a website
-    
+
     Args:
         url: The website URL to scrape
-        
+
     Returns:
         Extracted text content from the website
     """
     scraper = WebSearchScraper()
-    return await scraper.scrape_website(url)
+
+    # Log available methods to help debug
+    available_methods = [method for method in dir(scraper)
+                        if not method.startswith('_') and callable(getattr(scraper, method))]
+    logger.info(f"Available methods on WebSearchScraper: {available_methods}")
+
+    # Try to find a suitable method
+    if hasattr(scraper, 'scrape'):
+        return await scraper.scrape(url)
+    elif hasattr(scraper, 'get_text'):
+        return await scraper.get_text(url)
+    elif hasattr(scraper, 'fetch_content'):
+        return await scraper.fetch_content(url)
+    elif hasattr(scraper, 'extract_text'):
+        return await scraper.extract_text(url)
+    else:
+        logger.error("No suitable scraping method found on WebSearchScraper")
+        return f"Failed to scrape content from {url}"
 
 async def scrape_amazon_listing_details(url: str, include_storefront: bool = False) -> dict:
     """
@@ -2275,10 +2292,10 @@ def generate_pdf_in_background(session_id: int, project_name: str):
 
                         # Add formatted demographic information
                         story.append(Paragraph(f"Gender = {demographics.get('gender', 'male and female')}", target_customer_style))
-                        story.append(Paragraph(f"age range = {demographics.get('age_range', 'aged 25-45')}", target_customer_style))
-                        story.append(Paragraph(f"location = {demographics.get('location', 'United States')}", target_customer_style))
-                        story.append(Paragraph(f"income = {demographics.get('income', 'high income')}", target_customer_style))
-                        story.append(Paragraph(f"profession = {demographics.get('profession', 'engaged in regular tennis activities')}", target_customer_style))
+                        story.append(Paragraph(f"Age Range = {demographics.get('age_range', 'aged 25-45')}", target_customer_style))
+                        story.append(Paragraph(f"Location = {demographics.get('location', 'United States')}", target_customer_style))
+                        story.append(Paragraph(f"Income = {demographics.get('income', 'high income')}", target_customer_style))
+                        story.append(Paragraph(f"Profession = {demographics.get('profession', 'engaged in regular tennis activities')}", target_customer_style))
                         story.append(Spacer(1, 0.1 * inch))  # Small space after demographics
 
                         # Add other questions if any
