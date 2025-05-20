@@ -2503,6 +2503,33 @@ async def collect_input(
         logger.info(f"Session {session.id} created successfully.")
     return {"session_id": session.id, "form": form_json_sections}
 
+@app.post("/upload-brand-guidelines-to-drive/{session_id}")
+def upload_brand_guidelines_to_drive(session_id: int):
+    with Session(engine) as db:
+        session = db.get(SessionData, session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        inputs = json.loads(session.brand_input) if session.brand_input else {}
+        project_name = inputs.get("project_name", f"project_{session_id}")
+
+        # Check if brand guideline file exists
+        if not session.brand_guideline_file_path or not os.path.exists(session.brand_guideline_file_path):
+            raise HTTPException(status_code=404, detail="Brand guideline file not found")
+
+        # Create a new filename with project name
+        original_filename = os.path.basename(session.brand_guideline_file_path)
+        file_ext = os.path.splitext(original_filename)[1]  # Get file extension
+        new_filename = f"{sanitize_filename(project_name)}_guidelines{file_ext}"
+
+        # Upload to Google Drive
+        file_id, preview_url = upload_to_drive(session.brand_guideline_file_path, new_filename)
+
+        if not file_id:
+            raise HTTPException(status_code=500, detail="Failed to upload to Google Drive")
+
+        return {"message": "Brand guidelines uploaded to Google Drive", "file_id": file_id, "preview_url": preview_url}
+        
 @app.get("/get-editable-form/{session_id}")
 def get_editable_form(session_id: int):
     with Session(engine) as db:
