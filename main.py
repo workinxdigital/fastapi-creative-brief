@@ -24,6 +24,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, PageBreak
+from datetime import datetime
 from reportlab.pdfgen.canvas import Canvas
 from sqlmodel import Field, Session, SQLModel, create_engine
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -2031,7 +2032,105 @@ Generate the JSON output now:
         return json.dumps({"editable_sections": [{"title": "Error", "questions": [{"question": "Generation Failed", "answer": str(e)}]}]})
 
 # --- BACKGROUND TASKS ---
-# Add this class for page numbering
+# Helper function to get section title
+def get_section_title(section_key):
+    """Map section keys to display titles"""
+    section_titles = {
+        'assets_overview': 'ASSETS OVERVIEW',
+        'project_overview': 'PROJECT OVERVIEW',
+        'product_snapshot': 'PRODUCT SNAPSHOT',
+        'current_listing_challenges': 'CURRENT LISTING CHALLENGES',
+        'target_customer': 'TARGET CUSTOMER DEEP DIVE',
+        'barriers_to_purchase': 'BARRIERS TO PURCHASE',
+        'brand_voice': 'BRAND VOICE & TONE',
+        'usps': 'USPs (UNIQUE SELLING PROPOSITIONS)',
+        'wow_factor': '5-SECOND WOW FACTOR',
+        'key_features': 'KEY FEATURES (WITH CONTEXT)',
+        'top_selling_points': 'TOP 6 SELLING POINTS (WITH STRATEGIC JUSTIFICATION)',
+        'competitive_landscape': 'COMPETITIVE LANDSCAPE',
+        'search_keywords': 'SEARCH & KEYWORDS STRATEGY',
+        'brand_story': 'BRAND STORY, VALUES & PURPOSE',
+        'design_direction': 'DESIGN DIRECTION',
+        'final_notes': 'FINAL NOTES & STRATEGIC CALLOUTS'
+    }
+    return section_titles.get(section_key, section_key.upper().replace('_', ' '))
+
+# Helper function to get question text
+def get_question_text(section_key, question_key):
+    """Map question keys to display text"""
+    # Define question mappings for each section
+    question_mappings = {
+        'project_overview': {
+            'project_name': 'Project Name',
+            'brand_name': 'Brand Name',
+            'website': 'Website',
+            'amazon_listing': 'Amazon Listing (if available)',
+            'instagram_handle': 'Instagram Handle (if applicable)'
+        },
+        'product_snapshot': {
+            'what_is_it': 'What exactly is the product?',
+            'how_it_works': 'What does it do and how does it work?',
+            'problem_solved': 'What problem does it solve?',
+            'target_audience': 'Who is it meant for?'
+        },
+        'current_listing_challenges': {
+            'challenges': 'What\'s broken or underwhelming about the current Amazon listing, brand positioning, or creative execution?',
+            'conversion_issues': 'Where are they losing conversions or attention?'
+        },
+        'target_customer': {
+            'demographics': 'Gender, age range, location, income, profession',
+            'identity': 'Life stage or identity (e.g., new moms, eco-conscious Gen Z, busy professionals)',
+            'pain_points': 'Pain points, desires, motivations',
+            'shopping_behavior': 'How do they shop on Amazon? What do they care about when scrolling?'
+        },
+        'barriers_to_purchase': {
+            'doubts': 'List the common doubts, hesitations, or FAQ-style friction points that stop people from buying — even if they like the product.'
+        },
+        'brand_voice': {
+            'tone': 'Describe the tone and copywriting style the brand uses or should use (e.g., bold, sassy, informative, premium, conversational).',
+            'signature_phrases': 'Include any signature words, phrases, or linguistic quirks.'
+        },
+        'usps': {
+            'differentiators': 'What makes this product meaningfully different from other options in the category?',
+            'benefits': 'Think functional benefits, emotional angles, and cultural relevance.'
+        },
+        'wow_factor': {
+            'hook': 'If a customer saw this listing for 5 seconds, what single visual hook, copy line, or feature would stop them in their tracks?'
+        },
+        'key_features': {
+            'features': 'List 4–6 major features. But go beyond just the bullet points — explain: Why does this matter to the buyer? How does it connect to their lifestyle or values?'
+        },
+        'top_selling_points': {
+            'points': 'For each of the client\'s selected selling points: State the point. Explain *why* it\'s strategically powerful for this product and customer.'
+        },
+        'competitive_landscape': {
+            'competitors': 'List 2–3 main competitors',
+            'comparison': 'Describe how this product compares',
+            'differentiators': 'Mention any Amazon-specific differentiators (e.g. bundle, shipping time, design)'
+        },
+        'search_keywords': {
+            'keywords': 'Suggest relevant search terms and niche keywords to target. These should align with user intent, category trends, or long-tail SEO goals.'
+        },
+        'brand_story': {
+            'origin': 'Give a short but meaningful brand origin story or founder story.',
+            'values': 'Highlight core values, emotional drivers, or the "bigger why" behind the brand\'s existence.'
+        },
+        'design_direction': {
+            'preferences': 'Summarize the client\'s aesthetic preferences',
+            'visual_feel': 'Suggest how the visuals, layout, or color themes should feel (e.g., clean/minimal, bold/graphic, warm/natural)'
+        },
+        'final_notes': {
+            'insights': 'Include any extra insights for the creative team, such as: Packaging or compliance considerations, Customer education needs, Cross-sell or upsell potential, Social proof or influencer angles'
+        }
+    }
+
+    # Get the question mapping for the section
+    section_questions = question_mappings.get(section_key, {})
+
+    # Return the question text or a formatted version of the key
+    return section_questions.get(question_key, question_key.replace('_', ' ').capitalize())
+
+# Canvas class for page numbering
 class NumberedCanvas(Canvas):
     """Canvas that adds page numbers to each page"""
     def __init__(self, *args, **kwargs):
@@ -2056,7 +2155,6 @@ class NumberedCanvas(Canvas):
             )
             Canvas.showPage(self)
         Canvas.save(self)
-
 
 def generate_pdf_in_background(creative_brief_data, filename):
     """Generate a PDF with black background, page numbers, and section numbering"""
@@ -2147,11 +2245,15 @@ def generate_pdf_in_background(creative_brief_data, filename):
     story = []
 
     # Add title
-    title_text = f"Creative Brief: {creative_brief_data.get('project_name', 'Creative Brief')}"
+    # Safely get project name with a default value
+    project_name = creative_brief_data.get('project_name', 'Creative Brief')
+    if not isinstance(project_name, str):
+        project_name = 'Creative Brief'  # Default if not a string
+
+    title_text = f"Creative Brief: {project_name}"
     story.append(Paragraph(title_text, title_style))
 
     # Add date
-    from datetime import datetime
     date_text = f"Generated on {datetime.now().strftime('%B %d, %Y')}"
     story.append(Paragraph(date_text, date_style))
 
@@ -2160,8 +2262,12 @@ def generate_pdf_in_background(creative_brief_data, filename):
 
     # Process each section in the creative brief
     for section_key, section_data in creative_brief_data.items():
-        # Skip non-section data
+        # Skip non-section data or non-dictionary data
         if section_key in ['project_name', 'date', 'brand_name', 'website', 'amazon_listing', 'instagram_handle']:
+            continue
+
+        # Skip if section_data is not a dictionary
+        if not isinstance(section_data, dict):
             continue
 
         # Get section title
@@ -2174,7 +2280,7 @@ def generate_pdf_in_background(creative_brief_data, filename):
 
         # Special handling for TARGET CUSTOMER DEEP DIVE section
         if section_title == "TARGET CUSTOMER DEEP DIVE":
-            # Extract demographic information
+            # Extract demographic information with safe gets
             gender = section_data.get('gender', 'male and female')
             age_range = section_data.get('age_range', 'aged 25-45')
             location = section_data.get('location', 'United States')
@@ -2195,7 +2301,7 @@ def generate_pdf_in_background(creative_brief_data, filename):
                     question_text = get_question_text(section_key, question_key)
                     if question_text and answer:
                         story.append(Paragraph(f"{section_number}.{question_number}. {question_text}", question_style))
-                        story.append(Paragraph(answer, answer_style))
+                        story.append(Paragraph(str(answer), answer_style))  # Convert answer to string
                         question_number += 1
         else:
             # Regular section processing with numbered questions
@@ -2204,7 +2310,7 @@ def generate_pdf_in_background(creative_brief_data, filename):
                 question_text = get_question_text(section_key, question_key)
                 if question_text and answer:
                     story.append(Paragraph(f"{section_number}.{question_number}. {question_text}", question_style))
-                    story.append(Paragraph(answer, answer_style))
+                    story.append(Paragraph(str(answer), answer_style))  # Convert answer to string
                     question_number += 1
 
         section_number += 1
@@ -2220,57 +2326,6 @@ def generate_pdf_in_background(creative_brief_data, filename):
     doc.build(story, canvasmaker=NumberedCanvas, onFirstPage=on_page, onLaterPages=on_page)
 
     return filename
-
-# Helper function to get section title
-def get_section_title(section_key):
-    """Map section keys to display titles"""
-    section_titles = {
-        'assets_overview': 'ASSETS OVERVIEW',
-        'project_overview': 'PROJECT OVERVIEW',
-        'product_snapshot': 'PRODUCT SNAPSHOT',
-        'current_listing_challenges': 'CURRENT LISTING CHALLENGES',
-        'target_customer': 'TARGET CUSTOMER DEEP DIVE',
-        'barriers_to_purchase': 'BARRIERS TO PURCHASE',
-        'brand_voice': 'BRAND VOICE & TONE',
-        'usps': 'USPs (UNIQUE SELLING PROPOSITIONS)',
-        'wow_factor': '5-SECOND WOW FACTOR',
-        'key_features': 'KEY FEATURES (WITH CONTEXT)',
-        'top_selling_points': 'TOP 6 SELLING POINTS (WITH STRATEGIC JUSTIFICATION)',
-        'competitive_landscape': 'COMPETITIVE LANDSCAPE',
-        'search_keywords': 'SEARCH & KEYWORDS STRATEGY',
-        'brand_story': 'BRAND STORY, VALUES & PURPOSE',
-        'design_direction': 'DESIGN DIRECTION',
-        'final_notes': 'FINAL NOTES & STRATEGIC CALLOUTS'
-    }
-    return section_titles.get(section_key, section_key.upper().replace('_', ' '))
-
-# Helper function to get question text
-def get_question_text(section_key, question_key):
-    """Map question keys to display text"""
-    # Define question mappings for each section
-    question_mappings = {
-        'project_overview': {
-            'project_name': 'Project Name',
-            'brand_name': 'Brand Name',
-            'website': 'Website',
-            'amazon_listing': 'Amazon Listing (if available)',
-            'instagram_handle': 'Instagram Handle (if applicable)'
-        },
-        'product_snapshot': {
-            'what_is_it': 'What exactly is the product?',
-            'how_it_works': 'What does it do and how does it work?',
-            'problem_solved': 'What problem does it solve?',
-            'target_audience': 'Who is it meant for?'
-        },
-        # Add mappings for other sections as needed
-    }
-
-    # Get the question mapping for the section
-    section_questions = question_mappings.get(section_key, {})
-
-    # Return the question text or a formatted version of the key
-    return section_questions.get(question_key, question_key.replace('_', ' ').capitalize())
-
 def upload_to_drive(file_path: str, filename: str):
     try:
         # For Render deployment, the service account file should be at this location
