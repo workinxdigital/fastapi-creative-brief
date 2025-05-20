@@ -2031,162 +2031,6 @@ Generate the JSON output now:
         return json.dumps({"editable_sections": [{"title": "Error", "questions": [{"question": "Generation Failed", "answer": str(e)}]}]})
 
 # --- BACKGROUND TASKS ---
-def generate_pdf_in_background(session_id: int, project_name: str):
-    logger.info(f"Generating PDF for session {session_id} in background.")
-    with Session(engine) as db:
-        session = db.get(SessionData, session_id)
-        if not session:
-            logger.error(f"Session {session_id} not found for PDF generation.")
-            return
-
-        safe_filename_base = sanitize_filename(project_name)
-        pdf_filename = f"{safe_filename_base}.pdf"
-        pdf_path = os.path.join(PDF_EXPORTS_DIR, pdf_filename)
-
-        try:
-            # Create document with better margins
-            doc = SimpleDocTemplate(
-                pdf_path,
-                pagesize=LETTER,
-                rightMargin=inch*0.75,
-                leftMargin=inch*0.75,
-                topMargin=inch*0.75,
-                bottomMargin=inch*0.75
-            )
-
-            story = []
-            styles = getSampleStyleSheet()
-
-            # Create better styled paragraph formats
-            title_style = ParagraphStyle(
-                name='TitleStyle',
-                parent=styles['Title'],
-                fontSize=20,
-                spaceAfter=16,
-                fontName='Helvetica-Bold',
-                alignment=1  # Center alignment
-            )
-
-            h1_style = ParagraphStyle(
-                name='H1Style',
-                parent=styles['Heading1'],
-                fontSize=16,
-                spaceAfter=14,
-                spaceBefore=20,
-                fontName='Helvetica-Bold',
-                textColor='#333333'
-            )
-
-            h2_style = ParagraphStyle(
-                name='H2Style',
-                parent=styles['Heading2'],
-                fontSize=14,
-                spaceAfter=10,
-                spaceBefore=16,
-                fontName='Helvetica-Bold',
-                textColor='#444444'
-            )
-
-            question_style = ParagraphStyle(
-                name='QuestionStyle',
-                parent=styles['Normal'],
-                fontSize=12,
-                fontName='Helvetica-Bold',
-                spaceAfter=4,
-                spaceBefore=10,
-                textColor='#333333'
-            )
-
-            answer_style = ParagraphStyle(
-                name='AnswerStyle',
-                parent=styles['Normal'],
-                fontSize=11,
-                fontName='Helvetica',
-                leftIndent=20,
-                spaceAfter=12,
-                leading=14  # Line spacing
-            )
-
-            # Add title page
-            story.append(Paragraph(f"Creative Brief: {project_name}", title_style))
-            story.append(Spacer(1, 0.3 * inch))
-
-            # Add date
-            from datetime import datetime
-            current_date = datetime.now().strftime("%B %d, %Y")
-            date_style = ParagraphStyle(
-                name='DateStyle',
-                parent=styles['Normal'],
-                fontSize=11,
-                alignment=1  # Center alignment
-            )
-            story.append(Paragraph(f"Generated on {current_date}", date_style))
-            story.append(Spacer(1, 0.5 * inch))
-
-            # Add page break after title page
-            story.append(PageBreak())
-
-            # Process assets section
-            inputs = json.loads(session.brand_input) if session.brand_input else {}
-            story.append(Paragraph(MAIN_HEADINGS["ASSETS_OVERVIEW"], h2_style))
-
-            if inputs.get("has_assets", True):
-                asset_fields = [
-                    ("White Background Image Link", "white_background_image"),
-                    ("Old Images Link", "old_images"),
-                    ("Lifestyle Image Link", "lifestyle_image"),
-                    ("User-Generated Content Link", "user_generated_content"),
-                    ("Video Content Link", "video_content"),
-                ]
-
-                any_asset = False
-                for label, key in asset_fields:
-                    value = inputs.get(key, "")
-                    if value:
-                        any_asset = True
-                        story.append(Paragraph(f"<b>{label}:</b>", question_style))
-                        story.append(Paragraph(f"{value}", answer_style))
-
-                if not any_asset:
-                    story.append(Paragraph("No asset links provided.", answer_style))
-            else:
-                story.append(Paragraph("No assets provided.", answer_style))
-
-            story.append(Spacer(1, 0.2 * inch))
-
-            # Process each section with better formatting
-            sections = json.loads(session.form_data) if session.form_data else []
-
-            for section in sections:
-                heading = section.get("title", "Untitled Section")
-
-                # Check if this is a main heading (all caps in your React code)
-                if heading in MAIN_HEADINGS:
-                    story.append(Paragraph(heading, h1_style))
-                else:
-                    story.append(Paragraph(heading, h2_style))
-
-                if "questions" in section and isinstance(section["questions"], list):
-                    for qa in section["questions"]:
-                        q = qa.get("question", "")
-                        a = qa.get("answer", "N/A")
-
-                        if q:
-                            story.append(Paragraph(q, question_style))
-
-                            # Process answer text to handle bullet points and formatting
-                            processed_answer = process_answer_text(a)
-                            story.append(Paragraph(processed_answer, answer_style))
-
-                story.append(Spacer(1, 0.2 * inch))
-
-            # Build the PDF
-            doc.build(story)
-            logger.info(f"PDF generated at {pdf_path} for session {session_id}.")
-
-        except Exception as e:
-            logger.error(f"Error generating PDF for session {session_id}: {e}")
-
 def process_answer_text(text):
     """Process answer text to handle bullet points and formatting properly"""
     if not text:
@@ -2223,6 +2067,272 @@ def process_answer_text(text):
     processed_text = re.sub(r'_(.*?)_', r'<i>\1</i>', processed_text)
 
     return processed_text
+    
+def generate_pdf_in_background(session_id: int, project_name: str):
+    logger.info(f"Generating PDF for session {session_id} in background.")
+    with Session(engine) as db:
+        session = db.get(SessionData, session_id)
+        if not session:
+            logger.error(f"Session {session_id} not found for PDF generation.")
+            return
+
+        safe_filename_base = sanitize_filename(project_name)
+        pdf_filename = f"{safe_filename_base}.pdf"
+        pdf_path = os.path.join(PDF_EXPORTS_DIR, pdf_filename)
+
+        try:
+            # Create a custom canvas class for page numbering
+            class NumberedCanvas(Canvas):
+                def __init__(self, *args, **kwargs):
+                    Canvas.__init__(self, *args, **kwargs)
+                    self._saved_page_states = []
+
+                def showPage(self):
+                    self._saved_page_states.append(dict(self.__dict__))
+                    self._startPage()
+
+                def save(self):
+                    """Add page numbers to each page"""
+                    num_pages = len(self._saved_page_states)
+                    for state in self._saved_page_states:
+                        self.__dict__.update(state)
+                        self.setFont("Helvetica", 9)
+                        self.setFillColor(colors.white)
+                        self.drawRightString(
+                            self._pagesize[0] - 0.5*inch,
+                            0.5*inch,
+                            f"Page {self._pageNumber} of {num_pages}"
+                        )
+                        Canvas.showPage(self)
+                    Canvas.save(self)
+
+            # Create document with better margins
+            doc = SimpleDocTemplate(
+                pdf_path,
+                pagesize=LETTER,
+                rightMargin=inch*0.75,
+                leftMargin=inch*0.75,
+                topMargin=inch*0.75,
+                bottomMargin=inch*0.75
+            )
+
+            story = []
+            styles = getSampleStyleSheet()
+
+            # Create better styled paragraph formats with white text for black background
+            title_style = ParagraphStyle(
+                name='TitleStyle',
+                parent=styles['Title'],
+                fontSize=20,
+                spaceAfter=16,
+                fontName='Helvetica-Bold',
+                alignment=1,  # Center alignment
+                textColor=colors.white
+            )
+
+            h1_style = ParagraphStyle(
+                name='H1Style',
+                parent=styles['Heading1'],
+                fontSize=16,
+                spaceAfter=14,
+                spaceBefore=20,
+                fontName='Helvetica-Bold',
+                textColor=colors.white
+            )
+
+            h2_style = ParagraphStyle(
+                name='H2Style',
+                parent=styles['Heading2'],
+                fontSize=14,
+                spaceAfter=10,
+                spaceBefore=16,
+                fontName='Helvetica-Bold',
+                textColor=colors.white
+            )
+
+            question_style = ParagraphStyle(
+                name='QuestionStyle',
+                parent=styles['Normal'],
+                fontSize=12,
+                fontName='Helvetica-Bold',
+                spaceAfter=4,
+                spaceBefore=10,
+                textColor=colors.white
+            )
+
+            answer_style = ParagraphStyle(
+                name='AnswerStyle',
+                parent=styles['Normal'],
+                fontSize=11,
+                fontName='Helvetica',
+                leftIndent=20,
+                spaceAfter=12,
+                leading=14,  # Line spacing
+                textColor=colors.white
+            )
+
+            # Special style for target customer section
+            target_customer_style = ParagraphStyle(
+                name='TargetCustomerStyle',
+                parent=styles['Normal'],
+                fontSize=11,
+                fontName='Helvetica',
+                spaceAfter=2,
+                textColor=colors.white
+            )
+
+            # Add title page
+            story.append(Paragraph(f"Creative Brief: {project_name}", title_style))
+            story.append(Spacer(1, 0.3 * inch))
+
+            # Add date
+            from datetime import datetime
+            current_date = datetime.now().strftime("%B %d, %Y")
+            date_style = ParagraphStyle(
+                name='DateStyle',
+                parent=styles['Normal'],
+                fontSize=11,
+                alignment=1,  # Center alignment
+                textColor=colors.white
+            )
+            story.append(Paragraph(f"Generated on {current_date}", date_style))
+
+            # Process assets section
+            inputs = json.loads(session.brand_input) if session.brand_input else {}
+
+            # Section counter for numbering
+            section_number = 1
+
+            # Assets Overview section
+            story.append(Paragraph(f"{section_number}. {MAIN_HEADINGS['ASSETS_OVERVIEW']}", h1_style))
+            section_number += 1
+
+            if inputs.get("has_assets", True):
+                asset_fields = [
+                    ("White Background Image Link", "white_background_image"),
+                    ("Old Images Link", "old_images"),
+                    ("Lifestyle Image Link", "lifestyle_image"),
+                    ("User-Generated Content Link", "user_generated_content"),
+                    ("Video Content Link", "video_content"),
+                ]
+
+                any_asset = False
+                question_number = 1
+                for label, key in asset_fields:
+                    value = inputs.get(key, "")
+                    if value:
+                        any_asset = True
+                        story.append(Paragraph(f"{section_number-1}.{question_number}. <b>{label}:</b>", question_style))
+                        story.append(Paragraph(f"{value}", answer_style))
+                        question_number += 1
+
+                if not any_asset:
+                    story.append(Paragraph("No asset links provided.", answer_style))
+            else:
+                story.append(Paragraph("No assets provided.", answer_style))
+
+            story.append(Spacer(1, 0.2 * inch))
+
+            # Process each section with better formatting
+            sections = json.loads(session.form_data) if session.form_data else []
+
+            for section in sections:
+                heading = section.get("title", "Untitled Section")
+
+                # Check if this is a main heading
+                if heading in MAIN_HEADINGS.values():
+                    story.append(Paragraph(f"{section_number}. {heading}", h1_style))
+
+                    # Special handling for TARGET CUSTOMER DEEP DIVE section
+                    if heading == "TARGET CUSTOMER DEEP DIVE":
+                        # Extract demographic information from questions
+                        demographics = {}
+                        if "questions" in section and isinstance(section["questions"], list):
+                            for qa in section["questions"]:
+                                q = qa.get("question", "").lower()
+                                a = qa.get("answer", "")
+
+                                if "gender" in q:
+                                    demographics["gender"] = a
+                                elif "age" in q:
+                                    demographics["age_range"] = a
+                                elif "location" in q:
+                                    demographics["location"] = a
+                                elif "income" in q:
+                                    demographics["income"] = a
+                                elif "profession" in q:
+                                    demographics["profession"] = a
+
+                        # Add formatted demographic information
+                        story.append(Paragraph(f"Gender = {demographics.get('gender', 'male and female')}", target_customer_style))
+                        story.append(Paragraph(f"age range = {demographics.get('age_range', 'aged 25-45')}", target_customer_style))
+                        story.append(Paragraph(f"location = {demographics.get('location', 'United States')}", target_customer_style))
+                        story.append(Paragraph(f"income = {demographics.get('income', 'high income')}", target_customer_style))
+                        story.append(Paragraph(f"profession = {demographics.get('profession', 'engaged in regular tennis activities')}", target_customer_style))
+
+                        # Add other questions if any
+                        question_number = 1
+                        if "questions" in section and isinstance(section["questions"], list):
+                            for qa in section["questions"]:
+                                q = qa.get("question", "").lower()
+                                a = qa.get("answer", "N/A")
+
+                                # Skip demographic questions already handled
+                                if any(term in q for term in ["gender", "age", "location", "income", "profession"]):
+                                    continue
+
+                                if q:
+                                    story.append(Paragraph(f"{section_number}.{question_number}. {qa.get('question')}", question_style))
+                                    processed_answer = process_answer_text(a)
+                                    story.append(Paragraph(processed_answer, answer_style))
+                                    question_number += 1
+                    else:
+                        # Regular section processing with numbered questions
+                        question_number = 1
+                        if "questions" in section and isinstance(section["questions"], list):
+                            for qa in section["questions"]:
+                                q = qa.get("question", "")
+                                a = qa.get("answer", "N/A")
+
+                                if q:
+                                    story.append(Paragraph(f"{section_number}.{question_number}. {q}", question_style))
+                                    processed_answer = process_answer_text(a)
+                                    story.append(Paragraph(processed_answer, answer_style))
+                                    question_number += 1
+
+                    section_number += 1
+                else:
+                    # For non-main headings
+                    story.append(Paragraph(heading, h2_style))
+
+                    if "questions" in section and isinstance(section["questions"], list):
+                        for qa in section["questions"]:
+                            q = qa.get("question", "")
+                            a = qa.get("answer", "N/A")
+
+                            if q:
+                                story.append(Paragraph(q, question_style))
+                                processed_answer = process_answer_text(a)
+                                story.append(Paragraph(processed_answer, answer_style))
+
+                story.append(Spacer(1, 0.2 * inch))
+
+            # Function to draw the black background
+            def on_page(canvas, doc):
+                canvas.saveState()
+                canvas.setFillColor(colors.black)
+                canvas.rect(0, 0, doc.pagesize[0], doc.pagesize[1], fill=1)
+                canvas.restoreState()
+
+            # Build the PDF with black background and page numbers
+            doc.build(story, canvasmaker=NumberedCanvas, onFirstPage=on_page, onLaterPages=on_page)
+            logger.info(f"PDF generated at {pdf_path} for session {session_id}.")
+
+        except Exception as e:
+            logger.error(f"Error generating PDF for session {session_id}: {e}")
+            logger.exception(e)  # Log the full traceback
+
+    return pdf_path
 
 def upload_to_drive(file_path: str, filename: str):
     try:
