@@ -2061,21 +2061,46 @@ def process_answer_text(text):
     # Replace markdown-style bullet points with HTML bullets
     lines = text.split('\n')
     processed_lines = []
+    in_list = False
 
     for line in lines:
-        # Handle bullet points (*, -, •)
         line = line.strip()
+        # Handle bullet points (*, -, •)
         if line.startswith('* ') or line.startswith('- ') or line.startswith('• '):
-            # Convert to HTML bullet
+            # Start a new line for each bullet point
+            if not in_list:
+                in_list = True
+                # Add extra space before list if not at beginning
+                if processed_lines:
+                    processed_lines.append("")  # Empty line before list starts
+
+            # Convert to HTML bullet with proper indentation
             processed_line = f"&#8226; {line[2:].strip()}"
             processed_lines.append(processed_line)
-        elif line.startswith('1. ') or line.startswith('2. ') or line.startswith('3. '):
-            # Handle numbered lists
-            num, content = line.split('. ', 1)
-            processed_line = f"{num}. {content.strip()}"
-            processed_lines.append(processed_line)
+
+        # Handle numbered lists
+        elif re.match(r'^\d+\.\s', line):
+            # Extract number and content
+            match = re.match(r'^(\d+)\.\s+(.*)', line)
+            if match:
+                num, content = match.groups()
+                if not in_list:
+                    in_list = True
+                    # Add extra space before list if not at beginning
+                    if processed_lines:
+                        processed_lines.append("")  # Empty line before list starts
+
+                processed_line = f"{num}. {content.strip()}"
+                processed_lines.append(processed_line)
         else:
-            processed_lines.append(line)
+            # Regular text line
+            if in_list and line:  # End of list detected
+                in_list = False
+                if processed_lines:
+                    processed_lines.append("")  # Empty line after list ends
+
+            if line:  # Only add non-empty lines
+                processed_lines.append(line)
 
     # Join lines with HTML line breaks
     processed_text = "<br/>".join(processed_lines)
@@ -2104,6 +2129,8 @@ def generate_pdf_in_background(session_id: int, project_name: str):
 
         try:
             # Create a custom canvas class for page numbering
+            from reportlab.pdfgen.canvas import Canvas
+
             class NumberedCanvas(Canvas):
                 def __init__(self, *args, **kwargs):
                     Canvas.__init__(self, *args, **kwargs)
@@ -2233,7 +2260,8 @@ def generate_pdf_in_background(session_id: int, project_name: str):
             section_number = 1
 
             # Assets Overview section
-            story.append(Paragraph(f"{section_number}. {MAIN_HEADINGS['ASSETS_OVERVIEW']}", h1_style))
+            heading = MAIN_HEADINGS['ASSETS_OVERVIEW']
+            story.append(Paragraph(f"{section_number}. {heading}", h1_style))
             section_number += 1
 
             if inputs.get("has_assets", True):
@@ -2266,14 +2294,14 @@ def generate_pdf_in_background(session_id: int, project_name: str):
             sections = json.loads(session.form_data) if session.form_data else []
 
             for section in sections:
-                heading = section.get("title", "Untitled Section")
+                section_title = section.get("title", "Untitled Section")
 
                 # Check if this is a main heading
-                if heading in MAIN_HEADINGS.values():
-                    story.append(Paragraph(f"{section_number}. {heading}", h1_style))
+                if section_title in MAIN_HEADINGS.values():
+                    story.append(Paragraph(f"{section_number}. {section_title}", h1_style))
 
                     # Special handling for TARGET CUSTOMER DEEP DIVE section
-                    if heading == "TARGET CUSTOMER DEEP DIVE":
+                    if section_title == "TARGET CUSTOMER DEEP DIVE":
                         # Extract demographic information from questions
                         demographics = {}
                         if "questions" in section and isinstance(section["questions"], list):
@@ -2292,7 +2320,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                 elif "profession" in q:
                                     demographics["profession"] = a
 
-                        # Add formatted demographic information
+                        # Add formatted demographic information with the bright green color
                         story.append(Paragraph(f"Gender = {demographics.get('gender', 'male and female')}", target_customer_style))
                         story.append(Paragraph(f"Age Range = {demographics.get('age_range', 'aged 25-45')}", target_customer_style))
                         story.append(Paragraph(f"Location = {demographics.get('location', 'United States')}", target_customer_style))
@@ -2334,7 +2362,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                     story.append(Spacer(1, 0.3 * inch))  # Consistent spacing between sections
                 else:
                     # For non-main headings
-                    story.append(Paragraph(heading, h2_style))
+                    story.append(Paragraph(section_title, h2_style))
 
                     if "questions" in section and isinstance(section["questions"], list):
                         for qa in section["questions"]:
@@ -2359,11 +2387,23 @@ def generate_pdf_in_background(session_id: int, project_name: str):
             doc.build(story, canvasmaker=NumberedCanvas, onFirstPage=on_page, onLaterPages=on_page)
             logger.info(f"PDF generated at {pdf_path} for session {session_id}.")
 
+            # Upload to Google Drive
+            try:
+                file_id, preview_url = upload_to_drive(pdf_path, pdf_filename)
+                if file_id:
+                    logger.info(f"PDF uploaded to Google Drive: {file_id}, {preview_url}")
+                    return pdf_path, file_id, preview_url
+                else:
+                    logger.error(f"Failed to upload PDF to Google Drive for session {session_id}")
+                    return pdf_path, None, None
+            except Exception as e:
+                logger.error(f"Error uploading PDF to Google Drive: {e}")
+                return pdf_path, None, None
+
         except Exception as e:
             logger.error(f"Error generating PDF for session {session_id}: {e}")
             logger.exception(e)  # Log the full traceback
-
-    return pdf_path
+            return None, None, None
 
 def upload_to_drive(file_path: str, filename: str):
     try:
