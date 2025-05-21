@@ -2053,6 +2053,7 @@ Generate the JSON output now:
 # Define the bright green color from the screenshot
 BRIGHT_GREEN = colors.HexColor('#b5fb6f')
 
+# In the process_answer_text function, improve bullet point handling
 def process_answer_text(text):
     """Process answer text to handle bullet points and formatting properly"""
     if not text:
@@ -2074,8 +2075,8 @@ def process_answer_text(text):
                 if processed_lines:
                     processed_lines.append("")  # Empty line before list starts
 
-            # Convert to HTML bullet with proper indentation
-            processed_line = f"&#8226; {line[2:].strip()}"
+            # Convert to HTML bullet with proper indentation and start on a new line
+            processed_line = f"<br/>&#8226; {line[2:].strip()}"
             processed_lines.append(processed_line)
 
         # Handle numbered lists
@@ -2090,7 +2091,7 @@ def process_answer_text(text):
                     if processed_lines:
                         processed_lines.append("")  # Empty line before list starts
 
-                processed_line = f"{num}. {content.strip()}"
+                processed_line = f"<br/>{num}. {content.strip()}"
                 processed_lines.append(processed_line)
         else:
             # Regular text line
@@ -2226,14 +2227,14 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 firstLineIndent=0  # No first line indent
             )
 
-            # Special style for target customer section
+            # Special style for target customer section with bright green color
             target_customer_style = ParagraphStyle(
                 name='TargetCustomerStyle',
                 parent=styles['Normal'],
                 fontSize=11,
                 fontName='Helvetica',
                 spaceAfter=4,  # Less spacing between these items
-                textColor=colors.white,
+                textColor=BRIGHT_GREEN,  # Using bright green for demographic info
                 leftIndent=40  # Same indentation as questions for alignment
             )
 
@@ -2252,6 +2253,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 textColor=colors.white
             )
             story.append(Paragraph(f"Generated on {current_date}", date_style))
+            story.append(PageBreak())  # Start content on a new page
 
             # Process assets section
             inputs = json.loads(session.brand_input) if session.brand_input else {}
@@ -2264,6 +2266,17 @@ def generate_pdf_in_background(session_id: int, project_name: str):
             story.append(Paragraph(f"{section_number}. {heading}", h1_style))
             section_number += 1
 
+            # Brand Guidelines section
+            story.append(Paragraph(f"{section_number-1}.1. Brand Guidelines", question_style))
+            if session.brand_guideline_file_path:
+                guideline_text = f"Uploaded: {os.path.basename(session.brand_guideline_file_path)}"
+                if session.brand_guideline_preview_url:
+                    guideline_text += f" (<a href='{session.brand_guideline_preview_url}' color='#B5FB6F'>View on Google Drive</a>)"
+                story.append(Paragraph(guideline_text, answer_style))
+            else:
+                story.append(Paragraph("No brand guidelines provided.", answer_style))
+
+            # Other assets
             if inputs.get("has_assets", True):
                 asset_fields = [
                     ("White Background Image Link", "white_background_image"),
@@ -2274,17 +2287,17 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 ]
 
                 any_asset = False
-                question_number = 1
+                question_number = 2  # Start from 2 since Brand Guidelines is 1
                 for label, key in asset_fields:
                     value = inputs.get(key, "")
                     if value:
                         any_asset = True
-                        story.append(Paragraph(f"{section_number-1}.{question_number}. <b>{label}:</b>", question_style))
+                        story.append(Paragraph(f"{section_number-1}.{question_number}. {label}", question_style))
                         story.append(Paragraph(f"{value}", answer_style))
                         question_number += 1
 
                 if not any_asset:
-                    story.append(Paragraph("No asset links provided.", answer_style))
+                    story.append(Paragraph("No additional asset links provided.", answer_style))
             else:
                 story.append(Paragraph("No assets provided.", answer_style))
 
@@ -2309,7 +2322,38 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                 q = qa.get("question", "").lower()
                                 a = qa.get("answer", "")
 
-                                if "gender" in q:
+                                if "gender" in q and "age" in q and "location" in q and "income" in q and "profession" in q:
+                                    # This is the combined demographic question
+                                    demo_text = a
+                                    # Try to extract individual demographics
+                                    gender_match = re.search(r'gender[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
+                                    age_match = re.search(r'age[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
+                                    location_match = re.search(r'location[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
+                                    income_match = re.search(r'income[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
+                                    profession_match = re.search(r'profession[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
+
+                                    if gender_match:
+                                        demographics["gender"] = gender_match.group(1).strip()
+                                    if age_match:
+                                        demographics["age_range"] = age_match.group(1).strip()
+                                    if location_match:
+                                        demographics["location"] = location_match.group(1).strip()
+                                    if income_match:
+                                        demographics["income"] = income_match.group(1).strip()
+                                    if profession_match:
+                                        demographics["profession"] = profession_match.group(1).strip()
+
+                                    # If we couldn't extract structured data, use the whole text
+                                    if not any([gender_match, age_match, location_match, income_match, profession_match]):
+                                        # Split by commas or line breaks
+                                        parts = re.split(r'[,\n]+', demo_text)
+                                        if len(parts) >= 5:
+                                            demographics["gender"] = parts[0].strip()
+                                            demographics["age_range"] = parts[1].strip()
+                                            demographics["location"] = parts[2].strip()
+                                            demographics["income"] = parts[3].strip()
+                                            demographics["profession"] = parts[4].strip()
+                                elif "gender" in q:
                                     demographics["gender"] = a
                                 elif "age" in q:
                                     demographics["age_range"] = a
@@ -2321,12 +2365,13 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                     demographics["profession"] = a
 
                         # Add formatted demographic information with the bright green color
-                        story.append(Paragraph(f"Gender = {demographics.get('gender', 'male and female')}", target_customer_style))
-                        story.append(Paragraph(f"Age Range = {demographics.get('age_range', 'aged 25-45')}", target_customer_style))
-                        story.append(Paragraph(f"Location = {demographics.get('location', 'United States')}", target_customer_style))
-                        story.append(Paragraph(f"Income = {demographics.get('income', 'high income')}", target_customer_style))
-                        story.append(Paragraph(f"Profession = {demographics.get('profession', 'engaged in regular tennis activities')}", target_customer_style))
-                        story.append(Spacer(1, 0.1 * inch))  # Small space after demographics
+                        if demographics:
+                            story.append(Paragraph(f"Gender = {demographics.get('gender', 'Not specified')}", target_customer_style))
+                            story.append(Paragraph(f"Age Range = {demographics.get('age_range', 'Not specified')}", target_customer_style))
+                            story.append(Paragraph(f"Location = {demographics.get('location', 'Not specified')}", target_customer_style))
+                            story.append(Paragraph(f"Income = {demographics.get('income', 'Not specified')}", target_customer_style))
+                            story.append(Paragraph(f"Profession = {demographics.get('profession', 'Not specified')}", target_customer_style))
+                            story.append(Spacer(1, 0.1 * inch))  # Small space after demographics
 
                         # Add other questions if any
                         question_number = 1
@@ -2336,7 +2381,8 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                 a = qa.get("answer", "N/A")
 
                                 # Skip demographic questions already handled
-                                if any(term in q for term in ["gender", "age", "location", "income", "profession"]):
+                                if ("gender" in q and "age" in q and "location" in q and "income" in q and "profession" in q) or \
+                                   any(term in q for term in ["gender", "age", "location", "income", "profession"]):
                                     continue
 
                                 if q:
