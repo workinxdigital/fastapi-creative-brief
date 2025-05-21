@@ -126,6 +126,8 @@ class SessionData(SQLModel, table=True):
     website_data: str
     amazon_data: str
     brand_guideline_file_path: Optional[str] = None
+    brand_guideline_drive_id: Optional[str] = None  # Add this field
+    brand_guideline_preview_url: Optional[str] = None  # Add this field
     finalized: bool = Field(default=False)
     section_status: str = Field(default="{}")
 
@@ -2450,6 +2452,7 @@ async def on_startup():
     os.makedirs(PDF_EXPORTS_DIR, exist_ok=True)
     logger.info("Application startup complete.")
 
+# Modify the collect-input endpoint to handle brand guideline file upload and Google Drive upload
 @app.post("/collect-input")
 async def collect_input(
     project_name: str = Form(...), brand_name: str = Form(...), product_about: str = Form(...),
@@ -2461,7 +2464,7 @@ async def collect_input(
     white_background_image: str = Form(""), old_images: str = Form(""),
     lifestyle_image: str = Form(""), user_generated_content: str = Form(""),
     video_content: str = Form(""), no_assets_text: str = Form(""),
-    include_storefront: bool = Form(False),  # New parameter for storefront extraction
+    include_storefront: bool = Form(False),
     background_tasks: BackgroundTasks = None
 ):
     logger.info("Received input collection request.")
@@ -2469,10 +2472,30 @@ async def collect_input(
         if isinstance(val, str):
             return [item.strip() for item in val.split(',') if item.strip()] if val else []
         return val if isinstance(val, list) else []
+
     listing_elements = ensure_list(listing_elements)
     product_category = ensure_list(product_category)
     whats_not_working = ensure_list(whats_not_working)
-    file_path = save_uploaded_file(brand_guideline_file) if brand_guideline_file else None
+
+    # Save brand guideline file locally
+    file_path = None
+    drive_id = None
+    preview_url = None
+
+    if brand_guideline_file:
+        file_path = save_uploaded_file(brand_guideline_file)
+
+        # Upload to Google Drive immediately
+        if file_path:
+            # Create a filename with project name for better organization
+            original_filename = os.path.basename(file_path)
+            file_ext = os.path.splitext(original_filename)[1]  # Get file extension
+            drive_filename = f"{sanitize_filename(project_name)}_guidelines{file_ext}"
+
+            # Upload to Google Drive
+            drive_id, preview_url = upload_to_drive(file_path, drive_filename)
+            logger.info(f"Brand guideline uploaded to Drive: {drive_id}, {preview_url}")
+
     inputs = {
         "project_name": project_name, "brand_name": brand_name, "product_about": product_about,
         "amazon_listing": amazon_listing, "website_url": website_url, "instagram_url": instagram_url,
@@ -2482,8 +2505,12 @@ async def collect_input(
         "has_assets": has_assets, "white_background_image": white_background_image,
         "old_images": old_images, "lifestyle_image": lifestyle_image,
         "user_generated_content": user_generated_content, "video_content": video_content,
-        "no_assets_text": no_assets_text, "include_storefront": include_storefront
+        "no_assets_text": no_assets_text, "include_storefront": include_storefront,
+        "brand_guideline_file_name": os.path.basename(file_path) if file_path else None,
+        "brand_guideline_drive_id": drive_id,
+        "brand_guideline_preview_url": preview_url
     }
+
     amazon_details = await scrape_amazon_listing_details(amazon_listing, include_storefront) if amazon_listing else {}
     voc_insights = extract_and_transform_voc(amazon_details.get('reviews_raw', []), amazon_details.get('qna_raw', [])) if amazon_details else "No Amazon data."
     website_data = await scrape_website_text(website_url) if website_url else ""
@@ -2491,16 +2518,23 @@ async def collect_input(
     form_json_sections = parse_gpt_output(gpt_output_str).get("editable_sections", [])
     section_status = {str(i): {"saved": False, "approved": False} for i in range(len(form_json_sections))}
     amazon_data_to_store = json.dumps({"scraped_details": amazon_details, "voc_insights": voc_insights})
+
     with Session(engine) as db:
         session = SessionData(
-            brand_input=json.dumps(inputs), form_data=json.dumps(form_json_sections),
-            website_data=website_data, amazon_data=amazon_data_to_store,
-            brand_guideline_file_path=file_path, section_status=json.dumps(section_status)
+            brand_input=json.dumps(inputs),
+            form_data=json.dumps(form_json_sections),
+            website_data=website_data,
+            amazon_data=amazon_data_to_store,
+            brand_guideline_file_path=file_path,
+            brand_guideline_drive_id=drive_id,
+            brand_guideline_preview_url=preview_url,
+            section_status=json.dumps(section_status)
         )
         db.add(session)
         db.commit()
         db.refresh(session)
         logger.info(f"Session {session.id} created successfully.")
+
     return {"session_id": session.id, "form": form_json_sections}
 
 @app.post("/upload-brand-guidelines-to-drive/{session_id}")
@@ -2536,12 +2570,20 @@ def get_editable_form(session_id: int):
         session = db.get(SessionData, session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
+
         section_status = json.loads(session.section_status) if session.section_status else {}
         form_sections = json.loads(session.form_data) if session.form_data else []
+        brand_input = json.loads(session.brand_input) if session.brand_input else {}
+
+        # Include brand guideline information
         return {
             "editable_sections": form_sections,
             "finalized": session.finalized,
-            "section_status": section_status
+            "section_status": section_status,
+            "brand_guideline_file_name": os.path.basename(session.brand_guideline_file_path) if session.brand_guideline_file_path else None,
+            "brand_guideline_drive_id": session.brand_guideline_drive_id,
+            "brand_guideline_preview_url": session.brand_guideline_preview_url,
+            "brand_input": brand_input  # Include the full brand input for reference
         }
 
 class EditedFormInput(BaseModel):
