@@ -2093,7 +2093,6 @@ def process_answer_text(text):
     processed_text = re.sub(r'_(.*?)_', r'<i>\1</i>', processed_text)
 
     return processed_text
-
 def generate_pdf_in_background(session_id: int, project_name: str):
     logger.info(f"Generating PDF for session {session_id} in background.")
     with Session(engine) as db:
@@ -2109,37 +2108,38 @@ def generate_pdf_in_background(session_id: int, project_name: str):
         try:
             # Create a custom canvas class for page numbering
             from reportlab.pdfgen.canvas import Canvas
+            from reportlab.lib.pagesizes import LETTER
+            from reportlab.platypus import BaseDocTemplate, PageTemplate, Frame
 
-            class NumberedCanvas(Canvas):
-                def __init__(self, *args, **kwargs):
-                    Canvas.__init__(self, *args, **kwargs)
-                    self._saved_page_states = []
+            # Define a custom PageTemplate with black background
+            class BlackBackgroundDocTemplate(BaseDocTemplate):
+                def __init__(self, filename, **kw):
+                    BaseDocTemplate.__init__(self, filename, **kw)
+                    template = PageTemplate('normal', [Frame(
+                        self.leftMargin,
+                        self.bottomMargin,
+                        self.width,
+                        self.height,
+                        id='normal'
+                    )], onPage=self._add_page_background)
+                    self.addPageTemplates([template])
 
-                def showPage(self):
-                    self._saved_page_states.append(dict(self.__dict__))
-                    self._startPage()
+                def _add_page_background(self, canvas, doc):
+                    # Fill the entire page with black
+                    canvas.setFillColor(colors.black)
+                    canvas.rect(0, 0, doc.pagesize[0], doc.pagesize[1], fill=1)
 
-                def save(self):
-                    """Add page numbers to each page"""
-                    num_pages = len(self._saved_page_states)
-                    for state in self._saved_page_states:
-                        self.__dict__.update(state)
-                        # Fill page with black background
-                        self.setFillColor(colors.black)
-                        self.rect(0, 0, self._pagesize[0], self._pagesize[1], fill=True)
-                        # Set white color for page numbers
-                        self.setFont("Helvetica", 9)
-                        self.setFillColor(colors.white)
-                        self.drawRightString(
-                            self._pagesize[0] - 0.5*inch,
-                            0.5*inch,
-                            f"Page {self._pageNumber} of {num_pages}"
-                        )
-                        Canvas.showPage(self)
-                    Canvas.save(self)
+                    # Add page numbers in white
+                    canvas.setFillColor(colors.white)
+                    canvas.setFont("Helvetica", 9)
+                    canvas.drawRightString(
+                        doc.pagesize[0] - 0.5*inch,
+                        0.5*inch,
+                        f"Page {doc.page} of {doc.pageTemplate.id}"
+                    )
 
-            # Create document with better margins
-            doc = SimpleDocTemplate(
+            # Create document with black background
+            doc = BlackBackgroundDocTemplate(
                 pdf_path,
                 pagesize=LETTER,
                 rightMargin=inch*0.75,
@@ -2159,7 +2159,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 spaceAfter=24,  # Increased spacing after title
                 fontName='Helvetica-Bold',
                 alignment=1,  # Center alignment
-                textColor=colors.white  # Changed to white
+                textColor=colors.white  # White text
             )
 
             # Main heading style with bright green color
@@ -2181,7 +2181,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 spaceAfter=12,
                 spaceBefore=18,
                 fontName='Helvetica-Bold',
-                textColor=colors.white,  # Changed to white
+                textColor=colors.white,  # White text
                 leftIndent=20  # Consistent indentation
             )
 
@@ -2204,7 +2204,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 fontName='Helvetica',
                 spaceAfter=14,  # Increased spacing after answers
                 leading=14,  # Line spacing
-                textColor=colors.white,  # Changed to white
+                textColor=colors.white,  # White text
                 leftIndent=40,  # Same indentation as questions for alignment
                 firstLineIndent=0  # No first line indent
             )
@@ -2232,7 +2232,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 parent=styles['Normal'],
                 fontSize=11,
                 alignment=1,  # Center alignment
-                textColor=colors.white  # Changed to white
+                textColor=colors.white  # White text
             )
             story.append(Paragraph(f"Generated on {current_date}", date_style))
 
@@ -2401,8 +2401,8 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                 processed_answer = process_answer_text(a)
                                 story.append(Paragraph(processed_answer, answer_style))
 
-            # Build the PDF with the numbered canvas for page numbers
-            doc.build(story, canvasmaker=NumberedCanvas)
+            # Build the PDF
+            doc.build(story)
             logger.info(f"PDF generated successfully: {pdf_path}")
 
             # Upload to Google Drive
