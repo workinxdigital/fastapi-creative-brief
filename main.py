@@ -2053,7 +2053,7 @@ Generate the JSON output now:
 # Define the bright green color from the screenshot
 BRIGHT_GREEN = colors.HexColor('#b5fb6f')
 
-# In the process_answer_text function, improve bullet point handling
+# Improved process_answer_text function to handle bullet points and formatting properly
 def process_answer_text(text):
     """Process answer text to handle bullet points and formatting properly"""
     if not text:
@@ -2253,7 +2253,9 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 textColor=colors.white
             )
             story.append(Paragraph(f"Generated on {current_date}", date_style))
-            story.append(PageBreak())  # Start content on a new page
+
+            # REMOVE THIS LINE to fix the blank first page issue
+            # story.append(PageBreak())  # Start content on a new page
 
             # Process assets section
             inputs = json.loads(session.brand_input) if session.brand_input else {}
@@ -2420,36 +2422,47 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                 processed_answer = process_answer_text(a)
                                 story.append(Paragraph(processed_answer, answer_style))
 
-                    story.append(Spacer(1, 0.2 * inch))  # Slightly less spacing for sub-sections
-
-            # Function to draw the black background
-            def on_page(canvas, doc):
-                canvas.saveState()
-                canvas.setFillColor(colors.black)
-                canvas.rect(0, 0, doc.pagesize[0], doc.pagesize[1], fill=1)
-                canvas.restoreState()
-
-            # Build the PDF with black background and page numbers
-            doc.build(story, canvasmaker=NumberedCanvas, onFirstPage=on_page, onLaterPages=on_page)
-            logger.info(f"PDF generated at {pdf_path} for session {session_id}.")
+            # Build the PDF with the numbered canvas for page numbers
+            doc.build(story, canvasmaker=NumberedCanvas)
+            logger.info(f"PDF generated successfully: {pdf_path}")
 
             # Upload to Google Drive
             try:
-                file_id, preview_url = upload_to_drive(pdf_path, pdf_filename)
-                if file_id:
-                    logger.info(f"PDF uploaded to Google Drive: {file_id}, {preview_url}")
-                    return pdf_path, file_id, preview_url
-                else:
-                    logger.error(f"Failed to upload PDF to Google Drive for session {session_id}")
-                    return pdf_path, None, None
+                credentials = service_account.Credentials.from_service_account_file(
+                    SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+                drive_service = build('drive', 'v3', credentials=credentials)
+
+                file_metadata = {
+                    'name': pdf_filename,
+                    'parents': [GOOGLE_DRIVE_FOLDER_ID],
+                    'mimeType': 'application/pdf'
+                }
+
+                media = MediaFileUpload(pdf_path, mimetype='application/pdf')
+                file = drive_service.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id,webViewLink'
+                ).execute()
+
+                logger.info(f"PDF uploaded to Google Drive with ID: {file.get('id')}")
+
+                # Update permissions to make it accessible to anyone with the link
+                drive_service.permissions().create(
+                    fileId=file.get('id'),
+                    body={'type': 'anyone', 'role': 'reader'},
+                    fields='id'
+                ).execute()
+
+                # Return the web view link
+                return file.get('webViewLink')
             except Exception as e:
                 logger.error(f"Error uploading PDF to Google Drive: {e}")
-                return pdf_path, None, None
+                return None
 
         except Exception as e:
-            logger.error(f"Error generating PDF for session {session_id}: {e}")
-            logger.exception(e)  # Log the full traceback
-            return None, None, None
+            logger.error(f"Error generating PDF: {e}")
+            return None
 
 def upload_to_drive(file_path: str, filename: str):
     try:
