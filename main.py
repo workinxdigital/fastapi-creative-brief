@@ -2177,7 +2177,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 spaceAfter=24,  # Increased spacing after title
                 fontName='Helvetica-Bold',
                 alignment=1,  # Center alignment
-                textColor=colors.white
+                textColor=colors.black
             )
 
             # Main heading style with bright green color
@@ -2199,7 +2199,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 spaceAfter=12,
                 spaceBefore=18,
                 fontName='Helvetica-Bold',
-                textColor=colors.white,
+                textColor=colors.black,
                 leftIndent=20  # Consistent indentation
             )
 
@@ -2222,7 +2222,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 fontName='Helvetica',
                 spaceAfter=14,  # Increased spacing after answers
                 leading=14,  # Line spacing
-                textColor=colors.white,
+                textColor=colors.black,
                 leftIndent=40,  # Same indentation as questions for alignment
                 firstLineIndent=0  # No first line indent
             )
@@ -2250,7 +2250,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 parent=styles['Normal'],
                 fontSize=11,
                 alignment=1,  # Center alignment
-                textColor=colors.white
+                textColor=colors.black
             )
             story.append(Paragraph(f"Generated on {current_date}", date_style))
 
