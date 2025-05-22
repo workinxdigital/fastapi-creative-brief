@@ -2160,8 +2160,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 spaceAfter=24,
                 fontName='Helvetica-Bold',
                 alignment=1,  # Center alignment
-                textColor=colors.white,  # White text
-                backColor=colors.black  # Black background
+                textColor=colors.white
             )
 
             # Main heading style with bright green color
@@ -2173,8 +2172,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 spaceBefore=24,
                 fontName='Helvetica-Bold',
                 textColor=BRIGHT_GREEN,
-                leftIndent=20,
-                backColor=colors.black  # Black background
+                leftIndent=20
             )
 
             h2_style = ParagraphStyle(
@@ -2185,8 +2183,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 spaceBefore=18,
                 fontName='Helvetica-Bold',
                 textColor=colors.white,  # White text
-                leftIndent=20,
-                backColor=colors.black  # Black background
+                leftIndent=20
             )
 
             # Question style with bright green color
@@ -2198,8 +2195,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 spaceAfter=6,
                 spaceBefore=12,
                 textColor=BRIGHT_GREEN,
-                leftIndent=40,
-                backColor=colors.black  # Black background
+                leftIndent=40
             )
 
             answer_style = ParagraphStyle(
@@ -2211,8 +2207,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 leading=14,
                 textColor=colors.white,  # White text
                 leftIndent=40,
-                firstLineIndent=0,
-                backColor=colors.black  # Black background
+                firstLineIndent=0
             )
 
             # Special style for target customer section with bright green color
@@ -2223,8 +2218,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 fontName='Helvetica',
                 spaceAfter=4,
                 textColor=BRIGHT_GREEN,
-                leftIndent=40,
-                backColor=colors.black  # Black background
+                leftIndent=40
             )
 
             # Add title page
@@ -2240,7 +2234,6 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 fontSize=11,
                 alignment=1,  # Center alignment
                 textColor=colors.white,  # White text
-                backColor=colors.black  # Black background
             )
             story.append(Paragraph(f"Generated on {current_date}", date_style))
 
