@@ -2114,6 +2114,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
             # Define a custom PageTemplate with black background
             class BlackBackgroundDocTemplate(BaseDocTemplate):
                 def __init__(self, filename, **kw):
+                    self.total_pages = 0
                     BaseDocTemplate.__init__(self, filename, **kw)
                     template = PageTemplate('normal', [Frame(
                         self.leftMargin,
@@ -2124,18 +2125,26 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                     )], onPage=self._add_page_background)
                     self.addPageTemplates([template])
 
+                def handle_documentBegin(self):
+                    BaseDocTemplate.handle_documentBegin(self)
+                    self.canv.beginForm("background")
+                    self.canv.setFillColor(colors.black)
+                    self.canv.rect(0, 0, self.pagesize[0], self.pagesize[1], fill=1)
+                    self.canv.endForm()
+
                 def _add_page_background(self, canvas, doc):
-                    # Fill the entire page with black
-                    canvas.setFillColor(colors.black)
-                    canvas.rect(0, 0, doc.pagesize[0], doc.pagesize[1], fill=1)
+                    # Draw the black background
+                    canvas.doForm("background")
 
                     # Add page numbers in white
                     canvas.setFillColor(colors.white)
                     canvas.setFont("Helvetica", 9)
+                    # Store total pages for later use
+                    self.total_pages = max(self.total_pages, doc.page)
                     canvas.drawRightString(
                         doc.pagesize[0] - 0.5*inch,
                         0.5*inch,
-                        f"Page {doc.page} of {doc.pageTemplate.id}"
+                        f"Page {doc.page} of {self.total_pages}"
                     )
 
             # Create document with black background
@@ -2298,13 +2307,16 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                     if section_title == "TARGET CUSTOMER DEEP DIVE":
                         # Extract demographic information from questions
                         demographics = {}
+                        demographic_questions_processed = set()
+
                         if "questions" in section and isinstance(section["questions"], list):
                             for qa in section["questions"]:
                                 q = qa.get("question", "").lower()
                                 a = qa.get("answer", "")
 
+                                # Process combined demographic question
                                 if "gender" in q and "age" in q and "location" in q and "income" in q and "profession" in q:
-                                    # This is the combined demographic question
+                                    demographic_questions_processed.add(q)
                                     demo_text = a
                                     # Try to extract individual demographics
                                     gender_match = re.search(r'gender[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
@@ -2334,15 +2346,21 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                             demographics["location"] = parts[2].strip()
                                             demographics["income"] = parts[3].strip()
                                             demographics["profession"] = parts[4].strip()
-                                elif "gender" in q:
+                                # Process individual demographic questions
+                                elif "gender" in q and not any(term in q for term in ["age", "location", "income", "profession"]):
+                                    demographic_questions_processed.add(q)
                                     demographics["gender"] = a
-                                elif "age" in q:
+                                elif "age" in q and not any(term in q for term in ["gender", "location", "income", "profession"]):
+                                    demographic_questions_processed.add(q)
                                     demographics["age_range"] = a
-                                elif "location" in q:
+                                elif "location" in q and not any(term in q for term in ["gender", "age", "income", "profession"]):
+                                    demographic_questions_processed.add(q)
                                     demographics["location"] = a
-                                elif "income" in q:
+                                elif "income" in q and not any(term in q for term in ["gender", "age", "location", "profession"]):
+                                    demographic_questions_processed.add(q)
                                     demographics["income"] = a
-                                elif "profession" in q:
+                                elif "profession" in q and not any(term in q for term in ["gender", "age", "location", "income"]):
+                                    demographic_questions_processed.add(q)
                                     demographics["profession"] = a
 
                         # Add formatted demographic information with the bright green color
@@ -2362,8 +2380,12 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                 a = qa.get("answer", "N/A")
 
                                 # Skip demographic questions already handled
-                                if ("gender" in q and "age" in q and "location" in q and "income" in q and "profession" in q) or \
-                                   any(term in q for term in ["gender", "age", "location", "income", "profession"]):
+                                if q in demographic_questions_processed:
+                                    continue
+
+                                # Skip individual demographic questions
+                                if any(term in q for term in ["gender", "age", "location", "income", "profession"]) and \
+                                   not all(term in q for term in ["gender", "age", "location", "income", "profession"]):
                                     continue
 
                                 if q:
