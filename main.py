@@ -2108,6 +2108,8 @@ def generate_pdf_in_background(session_id: int, project_name: str):
 
         try:
             # Create a custom canvas class for page numbering
+            from reportlab.pdfgen.canvas import Canvas
+
             class NumberedCanvas(Canvas):
                 def __init__(self, *args, **kwargs):
                     Canvas.__init__(self, *args, **kwargs)
@@ -2122,6 +2124,10 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                     num_pages = len(self._saved_page_states)
                     for state in self._saved_page_states:
                         self.__dict__.update(state)
+                        # Fill page with black background
+                        self.setFillColor(colors.black)
+                        self.rect(0, 0, self._pagesize[0], self._pagesize[1], fill=True)
+                        # Set white color for page numbers
                         self.setFont("Helvetica", 9)
                         self.setFillColor(colors.white)
                         self.drawRightString(
@@ -2145,45 +2151,50 @@ def generate_pdf_in_background(session_id: int, project_name: str):
             story = []
             styles = getSampleStyleSheet()
 
-            # Create better styled paragraph formats with white text for black background
+            # Create better styled paragraph formats with consistent indentation
             title_style = ParagraphStyle(
                 name='TitleStyle',
                 parent=styles['Title'],
                 fontSize=20,
-                spaceAfter=16,
+                spaceAfter=24,  # Increased spacing after title
                 fontName='Helvetica-Bold',
                 alignment=1,  # Center alignment
-                textColor=colors.white
+                textColor=colors.white  # Changed to white
             )
 
+            # Main heading style with bright green color
             h1_style = ParagraphStyle(
                 name='H1Style',
                 parent=styles['Heading1'],
                 fontSize=16,
-                spaceAfter=14,
-                spaceBefore=20,
+                spaceAfter=16,  # Increased spacing after main headings
+                spaceBefore=24,  # Increased spacing before main headings
                 fontName='Helvetica-Bold',
-                textColor=colors.white
+                textColor=BRIGHT_GREEN,  # Using the bright green color
+                leftIndent=20  # Consistent indentation
             )
 
             h2_style = ParagraphStyle(
                 name='H2Style',
                 parent=styles['Heading2'],
                 fontSize=14,
-                spaceAfter=10,
-                spaceBefore=16,
+                spaceAfter=12,
+                spaceBefore=18,
                 fontName='Helvetica-Bold',
-                textColor=colors.white
+                textColor=colors.white,  # Changed to white
+                leftIndent=20  # Consistent indentation
             )
 
+            # Question style with bright green color
             question_style = ParagraphStyle(
                 name='QuestionStyle',
                 parent=styles['Normal'],
                 fontSize=12,
                 fontName='Helvetica-Bold',
-                spaceAfter=4,
-                spaceBefore=10,
-                textColor=colors.white
+                spaceAfter=6,  # Increased spacing after questions
+                spaceBefore=12,  # Increased spacing before questions
+                textColor=BRIGHT_GREEN,  # Using the bright green color
+                leftIndent=40  # Consistent indentation, indented from main headings
             )
 
             answer_style = ParagraphStyle(
@@ -2191,20 +2202,22 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 parent=styles['Normal'],
                 fontSize=11,
                 fontName='Helvetica',
-                leftIndent=20,
-                spaceAfter=12,
+                spaceAfter=14,  # Increased spacing after answers
                 leading=14,  # Line spacing
-                textColor=colors.white
+                textColor=colors.white,  # Changed to white
+                leftIndent=40,  # Same indentation as questions for alignment
+                firstLineIndent=0  # No first line indent
             )
 
-            # Special style for target customer section
+            # Special style for target customer section with bright green color
             target_customer_style = ParagraphStyle(
                 name='TargetCustomerStyle',
                 parent=styles['Normal'],
                 fontSize=11,
                 fontName='Helvetica',
-                spaceAfter=2,
-                textColor=colors.white
+                spaceAfter=4,  # Less spacing between these items
+                textColor=BRIGHT_GREEN,  # Using bright green for demographic info
+                leftIndent=40  # Same indentation as questions for alignment
             )
 
             # Add title page
@@ -2219,12 +2232,9 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 parent=styles['Normal'],
                 fontSize=11,
                 alignment=1,  # Center alignment
-                textColor=colors.white
+                textColor=colors.white  # Changed to white
             )
             story.append(Paragraph(f"Generated on {current_date}", date_style))
-
-            # REMOVE THIS LINE to fix the blank first page issue
-            # story.append(PageBreak())  # Start content on a new page
 
             # Process assets section
             inputs = json.loads(session.brand_input) if session.brand_input else {}
