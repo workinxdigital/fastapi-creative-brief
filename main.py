@@ -2059,49 +2059,27 @@ def process_answer_text(text):
     if not text:
         return ""
 
-    # Replace markdown-style bullet points with HTML bullets
+    # Split text into lines
     lines = text.split('\n')
     processed_lines = []
     in_list = False
+    bullet_count = 1  # Counter for numbered bullets
 
     for line in lines:
         line = line.strip()
-        # Handle bullet points (*, -, •)
-        if line.startswith('* ') or line.startswith('- ') or line.startswith('• '):
-            # Start a new line for each bullet point
+        if line:  # Only process non-empty lines
+            # Convert all bullet points and regular paragraphs to numbered bullets
+            # Start a new line for each bullet point or paragraph
             if not in_list:
                 in_list = True
                 # Add extra space before list if not at beginning
                 if processed_lines:
                     processed_lines.append("")  # Empty line before list starts
 
-            # Convert to HTML bullet with proper indentation and start on a new line
-            processed_line = f"<br/>&#8226; {line[2:].strip()}"
+            # Format as numbered bullet point
+            processed_line = f"<br/>{bullet_count}. {line}"
             processed_lines.append(processed_line)
-
-        # Handle numbered lists
-        elif re.match(r'^\d+\.\s', line):
-            # Extract number and content
-            match = re.match(r'^(\d+)\.\s+(.*)', line)
-            if match:
-                num, content = match.groups()
-                if not in_list:
-                    in_list = True
-                    # Add extra space before list if not at beginning
-                    if processed_lines:
-                        processed_lines.append("")  # Empty line before list starts
-
-                processed_line = f"<br/>{num}. {content.strip()}"
-                processed_lines.append(processed_line)
-        else:
-            # Regular text line
-            if in_list and line:  # End of list detected
-                in_list = False
-                if processed_lines:
-                    processed_lines.append("")  # Empty line after list ends
-
-            if line:  # Only add non-empty lines
-                processed_lines.append(line)
+            bullet_count += 1
 
     # Join lines with HTML line breaks
     processed_text = "<br/>".join(processed_lines)
@@ -2116,6 +2094,7 @@ def process_answer_text(text):
 
     return processed_text
 
+# Modify the PDF generation function to set black background and white text
 def generate_pdf_in_background(session_id: int, project_name: str):
     logger.info(f"Generating PDF for session {session_id} in background.")
     with Session(engine) as db:
@@ -2129,7 +2108,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
         pdf_path = os.path.join(PDF_EXPORTS_DIR, pdf_filename)
 
         try:
-            # Create a custom canvas class for page numbering
+            # Create a custom canvas class for page numbering with white text on black background
             from reportlab.pdfgen.canvas import Canvas
 
             class NumberedCanvas(Canvas):
@@ -2146,6 +2125,10 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                     num_pages = len(self._saved_page_states)
                     for state in self._saved_page_states:
                         self.__dict__.update(state)
+                        # Fill the page with black background
+                        self.setFillColor(colors.black)
+                        self.rect(0, 0, self._pagesize[0], self._pagesize[1], fill=1)
+                        # Set white text for page numbers
                         self.setFont("Helvetica", 9)
                         self.setFillColor(colors.white)
                         self.drawRightString(
@@ -2169,15 +2152,16 @@ def generate_pdf_in_background(session_id: int, project_name: str):
             story = []
             styles = getSampleStyleSheet()
 
-            # Create better styled paragraph formats with consistent indentation
+            # Create better styled paragraph formats with white text on black background
             title_style = ParagraphStyle(
                 name='TitleStyle',
                 parent=styles['Title'],
                 fontSize=20,
-                spaceAfter=24,  # Increased spacing after title
+                spaceAfter=24,
                 fontName='Helvetica-Bold',
                 alignment=1,  # Center alignment
-                textColor=colors.black
+                textColor=colors.white,  # White text
+                backColor=colors.black  # Black background
             )
 
             # Main heading style with bright green color
@@ -2185,11 +2169,12 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 name='H1Style',
                 parent=styles['Heading1'],
                 fontSize=16,
-                spaceAfter=16,  # Increased spacing after main headings
-                spaceBefore=24,  # Increased spacing before main headings
+                spaceAfter=16,
+                spaceBefore=24,
                 fontName='Helvetica-Bold',
-                textColor=BRIGHT_GREEN,  # Using the bright green color
-                leftIndent=20  # Consistent indentation
+                textColor=BRIGHT_GREEN,
+                leftIndent=20,
+                backColor=colors.black  # Black background
             )
 
             h2_style = ParagraphStyle(
@@ -2199,8 +2184,9 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 spaceAfter=12,
                 spaceBefore=18,
                 fontName='Helvetica-Bold',
-                textColor=colors.black,
-                leftIndent=20  # Consistent indentation
+                textColor=colors.white,  # White text
+                leftIndent=20,
+                backColor=colors.black  # Black background
             )
 
             # Question style with bright green color
@@ -2209,10 +2195,11 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 parent=styles['Normal'],
                 fontSize=12,
                 fontName='Helvetica-Bold',
-                spaceAfter=6,  # Increased spacing after questions
-                spaceBefore=12,  # Increased spacing before questions
-                textColor=BRIGHT_GREEN,  # Using the bright green color
-                leftIndent=40  # Consistent indentation, indented from main headings
+                spaceAfter=6,
+                spaceBefore=12,
+                textColor=BRIGHT_GREEN,
+                leftIndent=40,
+                backColor=colors.black  # Black background
             )
 
             answer_style = ParagraphStyle(
@@ -2220,11 +2207,12 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 parent=styles['Normal'],
                 fontSize=11,
                 fontName='Helvetica',
-                spaceAfter=14,  # Increased spacing after answers
-                leading=14,  # Line spacing
-                textColor=colors.black,
-                leftIndent=40,  # Same indentation as questions for alignment
-                firstLineIndent=0  # No first line indent
+                spaceAfter=14,
+                leading=14,
+                textColor=colors.white,  # White text
+                leftIndent=40,
+                firstLineIndent=0,
+                backColor=colors.black  # Black background
             )
 
             # Special style for target customer section with bright green color
@@ -2233,9 +2221,10 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 parent=styles['Normal'],
                 fontSize=11,
                 fontName='Helvetica',
-                spaceAfter=4,  # Less spacing between these items
-                textColor=BRIGHT_GREEN,  # Using bright green for demographic info
-                leftIndent=40  # Same indentation as questions for alignment
+                spaceAfter=4,
+                textColor=BRIGHT_GREEN,
+                leftIndent=40,
+                backColor=colors.black  # Black background
             )
 
             # Add title page
@@ -2250,9 +2239,12 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                 parent=styles['Normal'],
                 fontSize=11,
                 alignment=1,  # Center alignment
-                textColor=colors.black
+                textColor=colors.white,  # White text
+                backColor=colors.black  # Black background
             )
             story.append(Paragraph(f"Generated on {current_date}", date_style))
+
+            # Rest of the function remains the same...
 
             # REMOVE THIS LINE to fix the blank first page issue
             # story.append(PageBreak())  # Start content on a new page
