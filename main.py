@@ -2299,7 +2299,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
             for section in sections:
                 section_title = section.get("title", "Untitled Section")
 
-                # Check if this is a main heading
+               # Check if this is a main heading
                 if section_title in MAIN_HEADINGS.values():
                     story.append(Paragraph(f"{section_number}. {section_title}", h1_style))
 
@@ -2307,16 +2307,13 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                     if section_title == "TARGET CUSTOMER DEEP DIVE":
                         # Extract demographic information from questions
                         demographics = {}
-                        demographic_questions_processed = set()
-
                         if "questions" in section and isinstance(section["questions"], list):
                             for qa in section["questions"]:
                                 q = qa.get("question", "").lower()
                                 a = qa.get("answer", "")
 
-                                # Process combined demographic question
                                 if "gender" in q and "age" in q and "location" in q and "income" in q and "profession" in q:
-                                    demographic_questions_processed.add(q)
+                                    # This is the combined demographic question
                                     demo_text = a
                                     # Try to extract individual demographics
                                     gender_match = re.search(r'gender[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
@@ -2346,21 +2343,15 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                             demographics["location"] = parts[2].strip()
                                             demographics["income"] = parts[3].strip()
                                             demographics["profession"] = parts[4].strip()
-                                # Process individual demographic questions
-                                elif "gender" in q and not any(term in q for term in ["age", "location", "income", "profession"]):
-                                    demographic_questions_processed.add(q)
+                                elif "gender" in q:
                                     demographics["gender"] = a
-                                elif "age" in q and not any(term in q for term in ["gender", "location", "income", "profession"]):
-                                    demographic_questions_processed.add(q)
+                                elif "age" in q:
                                     demographics["age_range"] = a
-                                elif "location" in q and not any(term in q for term in ["gender", "age", "income", "profession"]):
-                                    demographic_questions_processed.add(q)
+                                elif "location" in q:
                                     demographics["location"] = a
-                                elif "income" in q and not any(term in q for term in ["gender", "age", "location", "profession"]):
-                                    demographic_questions_processed.add(q)
+                                elif "income" in q:
                                     demographics["income"] = a
-                                elif "profession" in q and not any(term in q for term in ["gender", "age", "location", "income"]):
-                                    demographic_questions_processed.add(q)
+                                elif "profession" in q:
                                     demographics["profession"] = a
 
                         # Add formatted demographic information with the bright green color
@@ -2380,12 +2371,8 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                 a = qa.get("answer", "N/A")
 
                                 # Skip demographic questions already handled
-                                if q in demographic_questions_processed:
-                                    continue
-
-                                # Skip individual demographic questions
-                                if any(term in q for term in ["gender", "age", "location", "income", "profession"]) and \
-                                   not all(term in q for term in ["gender", "age", "location", "income", "profession"]):
+                                if ("gender" in q and "age" in q and "location" in q and "income" in q and "profession" in q) or \
+                                   any(term in q for term in ["gender", "age", "location", "income", "profession"]):
                                     continue
 
                                 if q:
@@ -2423,7 +2410,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                 processed_answer = process_answer_text(a)
                                 story.append(Paragraph(processed_answer, answer_style))
 
-            # Build the PDF
+            # Build the PDF with the numbered canvas for page numbers
             doc.build(story)
             logger.info(f"PDF generated successfully: {pdf_path}")
 
