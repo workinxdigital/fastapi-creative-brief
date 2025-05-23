@@ -2093,6 +2093,7 @@ def process_answer_text(text):
     processed_text = re.sub(r'_(.*?)_', r'<i>\1</i>', processed_text)
 
     return processed_text
+
 def generate_pdf_in_background(session_id: int, project_name: str):
     logger.info(f"Generating PDF for session {session_id} in background.")
     with Session(engine) as db:
@@ -2299,7 +2300,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
             for section in sections:
                 section_title = section.get("title", "Untitled Section")
 
-               # Check if this is a main heading
+                # Check if this is a main heading
                 if section_title in MAIN_HEADINGS.values():
                     story.append(Paragraph(f"{section_number}. {section_title}", h1_style))
 
@@ -2307,15 +2308,26 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                     if section_title == "TARGET CUSTOMER DEEP DIVE":
                         # Extract demographic information from questions
                         demographics = {}
+                        lifestage_identity = None
+                        demographic_questions_processed = set()
+
                         if "questions" in section and isinstance(section["questions"], list):
                             for qa in section["questions"]:
                                 q = qa.get("question", "").lower()
                                 a = qa.get("answer", "")
 
+                                # Check for the lifestage/identity question
+                                if "life stage" in q.lower() or "identity" in q.lower() or "lifestage" in q.lower():
+                                    lifestage_identity = a
+                                    demographic_questions_processed.add(q)
+                                    continue
+
+                                # Process combined demographic question
                                 if "gender" in q and "age" in q and "location" in q and "income" in q and "profession" in q:
-                                    # This is the combined demographic question
+                                    demographic_questions_processed.add(q)
                                     demo_text = a
-                                    # Try to extract individual demographics
+
+                                    # Try to extract individual demographics from structured text
                                     gender_match = re.search(r'gender[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
                                     age_match = re.search(r'age[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
                                     location_match = re.search(r'location[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
@@ -2333,25 +2345,48 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                     if profession_match:
                                         demographics["profession"] = profession_match.group(1).strip()
 
-                                    # If we couldn't extract structured data, use the whole text
+                                    # If we couldn't extract structured data, try to parse the free-form text
                                     if not any([gender_match, age_match, location_match, income_match, profession_match]):
-                                        # Split by commas or line breaks
-                                        parts = re.split(r'[,\n]+', demo_text)
-                                        if len(parts) >= 5:
-                                            demographics["gender"] = parts[0].strip()
-                                            demographics["age_range"] = parts[1].strip()
-                                            demographics["location"] = parts[2].strip()
-                                            demographics["income"] = parts[3].strip()
-                                            demographics["profession"] = parts[4].strip()
-                                elif "gender" in q:
+                                        # Look for multi-line format
+                                        lines = demo_text.strip().split('\n')
+                                        if len(lines) >= 3:
+                                            # Try to extract from multi-line format
+                                            for line in lines:
+                                                line = line.strip()
+                                                if line.startswith("Primarily") or "women" in line.lower():
+                                                    demographics["gender"] = line
+                                                elif line.startswith("aged") or "25-40" in line:
+                                                    demographics["age_range"] = line
+                                                elif "residing" in line or "urban" in line or "suburban" in line:
+                                                    demographics["location"] = line
+                                                elif "income" in line.lower():
+                                                    demographics["income"] = line
+                                                elif "professional" in line.lower() or "stay-at-home" in line.lower():
+                                                    demographics["profession"] = line
+                                        else:
+                                            # Split by commas or line breaks for single-line format
+                                            parts = re.split(r'[,\n]+', demo_text)
+                                            if len(parts) >= 5:
+                                                demographics["gender"] = parts[0].strip()
+                                                demographics["age_range"] = parts[1].strip()
+                                                demographics["location"] = parts[2].strip()
+                                                demographics["income"] = parts[3].strip()
+                                                demographics["profession"] = parts[4].strip()
+                                # Process individual demographic questions
+                                elif "gender" in q and not any(term in q for term in ["age", "location", "income", "profession"]):
+                                    demographic_questions_processed.add(q)
                                     demographics["gender"] = a
-                                elif "age" in q:
+                                elif "age" in q and not any(term in q for term in ["gender", "location", "income", "profession"]):
+                                    demographic_questions_processed.add(q)
                                     demographics["age_range"] = a
-                                elif "location" in q:
+                                elif "location" in q and not any(term in q for term in ["gender", "age", "income", "profession"]):
+                                    demographic_questions_processed.add(q)
                                     demographics["location"] = a
-                                elif "income" in q:
+                                elif "income" in q and not any(term in q for term in ["gender", "age", "location", "profession"]):
+                                    demographic_questions_processed.add(q)
                                     demographics["income"] = a
-                                elif "profession" in q:
+                                elif "profession" in q and not any(term in q for term in ["gender", "age", "location", "income"]):
+                                    demographic_questions_processed.add(q)
                                     demographics["profession"] = a
 
                         # Add formatted demographic information with the bright green color
@@ -2363,6 +2398,12 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                             story.append(Paragraph(f"Profession = {demographics.get('profession', 'Not specified')}", target_customer_style))
                             story.append(Spacer(1, 0.1 * inch))  # Small space after demographics
 
+                        # Add Life stage or identity section if available
+                        if lifestage_identity:
+                            story.append(Paragraph("Life stage or identity (e.g., new moms, eco-conscious Gen Z, busy professionals)", question_style))
+                            story.append(Paragraph(lifestage_identity, answer_style))
+                            story.append(Spacer(1, 0.1 * inch))  # Small space after lifestage
+
                         # Add other questions if any
                         question_number = 1
                         if "questions" in section and isinstance(section["questions"], list):
@@ -2371,8 +2412,13 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                 a = qa.get("answer", "N/A")
 
                                 # Skip demographic questions already handled
+                                if q in demographic_questions_processed:
+                                    continue
+
+                                # Skip individual demographic questions
                                 if ("gender" in q and "age" in q and "location" in q and "income" in q and "profession" in q) or \
-                                   any(term in q for term in ["gender", "age", "location", "income", "profession"]):
+                                   any(term in q for term in ["gender", "age", "location", "income", "profession"]) or \
+                                   "life stage" in q.lower() or "identity" in q.lower() or "lifestage" in q.lower():
                                     continue
 
                                 if q:
@@ -2410,7 +2456,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                 processed_answer = process_answer_text(a)
                                 story.append(Paragraph(processed_answer, answer_style))
 
-            # Build the PDF with the numbered canvas for page numbers
+            # Build the PDF
             doc.build(story)
             logger.info(f"PDF generated successfully: {pdf_path}")
 
@@ -2451,7 +2497,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
         except Exception as e:
             logger.error(f"Error generating PDF: {e}")
             return None
-
+            
 def upload_to_drive(file_path: str, filename: str):
     try:
         # For Render deployment, the service account file should be at this location
