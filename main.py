@@ -2480,39 +2480,39 @@ def generate_pdf_in_background(session_id: int, project_name: str):
             doc.build(story)
             logger.info(f"PDF generated successfully: {pdf_path}")
 
-            # Upload to Google Drive
-            try:
-                credentials = service_account.Credentials.from_service_account_file(
-                    SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-                drive_service = build('drive', 'v3', credentials=credentials)
+            # # Upload to Google Drive
+            # try:
+            #     credentials = service_account.Credentials.from_service_account_file(
+            #         SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+            #     drive_service = build('drive', 'v3', credentials=credentials)
 
-                file_metadata = {
-                    'name': pdf_filename,
-                    'parents': [GOOGLE_DRIVE_FOLDER_ID],
-                    'mimeType': 'application/pdf'
-                }
+            #     file_metadata = {
+            #         'name': pdf_filename,
+            #         'parents': [GOOGLE_DRIVE_FOLDER_ID],
+            #         'mimeType': 'application/pdf'
+            #     }
 
-                media = MediaFileUpload(pdf_path, mimetype='application/pdf')
-                file = drive_service.files().create(
-                    body=file_metadata,
-                    media_body=media,
-                    fields='id,webViewLink'
-                ).execute()
+            #     media = MediaFileUpload(pdf_path, mimetype='application/pdf')
+            #     file = drive_service.files().create(
+            #         body=file_metadata,
+            #         media_body=media,
+            #         fields='id,webViewLink'
+            #     ).execute()
 
-                logger.info(f"PDF uploaded to Google Drive with ID: {file.get('id')}")
+            #     logger.info(f"PDF uploaded to Google Drive with ID: {file.get('id')}")
 
-                # Update permissions to make it accessible to anyone with the link
-                drive_service.permissions().create(
-                    fileId=file.get('id'),
-                    body={'type': 'anyone', 'role': 'reader'},
-                    fields='id'
-                ).execute()
+            #     # Update permissions to make it accessible to anyone with the link
+            #     drive_service.permissions().create(
+            #         fileId=file.get('id'),
+            #         body={'type': 'anyone', 'role': 'reader'},
+            #         fields='id'
+            #     ).execute()
 
-                # Return the web view link
-                return file.get('webViewLink')
-            except Exception as e:
-                logger.error(f"Error uploading PDF to Google Drive: {e}")
-                return None
+            #     # Return the web view link
+            #     return file.get('webViewLink')
+            # except Exception as e:
+            #     logger.error(f"Error uploading PDF to Google Drive: {e}")
+            #     return None
 
         except Exception as e:
             logger.error(f"Error generating PDF: {e}")
