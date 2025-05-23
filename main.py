@@ -2323,55 +2323,75 @@ def generate_pdf_in_background(session_id: int, project_name: str):
                                     continue
 
                                 # Process combined demographic question
+                              
                                 if "gender" in q and "age" in q and "location" in q and "income" in q and "profession" in q:
                                     demographic_questions_processed.add(q)
                                     demo_text = a
 
-                                    # Try to extract individual demographics from structured text
-                                    gender_match = re.search(r'gender[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
-                                    age_match = re.search(r'age[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
-                                    location_match = re.search(r'location[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
-                                    income_match = re.search(r'income[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
-                                    profession_match = re.search(r'profession[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
+                                # First, try to handle the specific format from your screenshot
+                                    lines = demo_text.strip().split('\n')
+                                    if len(lines) >= 3:
+                                       for line in lines:
+                                           line = line.strip()
+                                           if "primarily women" in line.lower() or line.lower().startswith("primarily"):
+                                               demographics["gender"] = line
+                                           elif "aged" in line.lower() or "-" in line and any(c.isdigit() for c in line):
+                                                 demographics["age_range"] = line
+                                           elif "income" in line.lower() or "mid-range" in line.lower():
+                                                  demographics["income"] = line
+                                           elif "motherhood" in line.lower() or "life stage" in line.lower():
+                                            # This could be both lifestage and location
+                                                  if "and in the" in line.lower():
+                                                      parts = line.split("and in the")
+                                                      if len(parts) == 2:
+                                                         location_part = parts[0].strip()
+                                                         lifestage_part = "in the " + parts[1].strip()
+                                                         if not lifestage_identity:
+                                                            lifestage_identity = lifestage_part
+                                                      else:
+                                                          lifestage_identity = line
+                                                  else:
+                                                      lifestage_identity = line
+                                           elif any(loc in line.lower() for loc in ["urban", "suburban", "rural", "city", "town", "country", "region"]):
+                                                demographics["location"] = line
+                                           elif any(prof in line.lower() for prof in ["professional", "occupation", "career", "job", "work"]):
+                                                demographics["profession"] = line
 
-                                    if gender_match:
-                                        demographics["gender"] = gender_match.group(1).strip()
-                                    if age_match:
-                                        demographics["age_range"] = age_match.group(1).strip()
-                                    if location_match:
-                                        demographics["location"] = location_match.group(1).strip()
-                                    if income_match:
-                                        demographics["income"] = income_match.group(1).strip()
-                                    if profession_match:
-                                        demographics["profession"] = profession_match.group(1).strip()
+                                            # If we couldn't extract all fields, try the other methods
+                                    if not all(key in demographics for key in ["gender", "age_range", "income"]):
+                                       # Try to extract individual demographics from structured text
+                                       gender_match = re.search(r'gender[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
+                                       age_match = re.search(r'age[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
+                                       location_match = re.search(r'location[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
+                                       income_match = re.search(r'income[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
+                                       profession_match = re.search(r'profession[:\s]+([^,\n]+)', demo_text, re.IGNORECASE)
 
-                                    # If we couldn't extract structured data, try to parse the free-form text
-                                    if not any([gender_match, age_match, location_match, income_match, profession_match]):
-                                        # Look for multi-line format
-                                        lines = demo_text.strip().split('\n')
-                                        if len(lines) >= 3:
-                                            # Try to extract from multi-line format
-                                            for line in lines:
-                                                line = line.strip()
-                                                if line.startswith("Primarily") or "women" in line.lower():
-                                                    demographics["gender"] = line
-                                                elif line.startswith("aged") or "25-40" in line:
-                                                    demographics["age_range"] = line
-                                                elif "residing" in line or "urban" in line or "suburban" in line:
-                                                    demographics["location"] = line
-                                                elif "income" in line.lower():
-                                                    demographics["income"] = line
-                                                elif "professional" in line.lower() or "stay-at-home" in line.lower():
-                                                    demographics["profession"] = line
-                                        else:
-                                            # Split by commas or line breaks for single-line format
-                                            parts = re.split(r'[,\n]+', demo_text)
-                                            if len(parts) >= 5:
-                                                demographics["gender"] = parts[0].strip()
-                                                demographics["age_range"] = parts[1].strip()
-                                                demographics["location"] = parts[2].strip()
-                                                demographics["income"] = parts[3].strip()
-                                                demographics["profession"] = parts[4].strip()
+                                       if gender_match and "gender" not in demographics:
+                                          demographics["gender"] = gender_match.group(1).strip()
+                                       if age_match and "age_range" not in demographics:
+                                          demographics["age_range"] = age_match.group(1).strip()
+                                       if location_match and "location" not in demographics:
+                                          demographics["location"] = location_match.group(1).strip()
+                                       if income_match and "income" not in demographics:
+                                          demographics["income"] = income_match.group(1).strip()
+                                       if profession_match and "profession" not in demographics:
+                                          demographics["profession"] = profession_match.group(1).strip()
+
+                                        # If we still couldn't extract structured data, try to parse the free-form text
+                                       if not all(key in demographics for key in ["gender", "age_range", "income"]):
+                                        # Split by commas or line breaks for single-line format
+                                           parts = re.split(r'[,\n]+', demo_text)
+                                           if len(parts) >= 3:
+                                              if "gender" not in demographics:
+                                                  demographics["gender"] = parts[0].strip()
+                                              if "age_range" not in demographics and len(parts) > 1:
+                                                  demographics["age_range"] = parts[1].strip()
+                                              if "location" not in demographics and len(parts) > 2:
+                                                  demographics["location"] = parts[2].strip()
+                                              if "income" not in demographics and len(parts) > 3:
+                                                  demographics["income"] = parts[3].strip()
+                                              if "profession" not in demographics and len(parts) > 4:
+                                                  demographics["profession"] = parts[4].strip()
                                 # Process individual demographic questions
                                 elif "gender" in q and not any(term in q for term in ["age", "location", "income", "profession"]):
                                     demographic_questions_processed.add(q)
@@ -2497,7 +2517,7 @@ def generate_pdf_in_background(session_id: int, project_name: str):
         except Exception as e:
             logger.error(f"Error generating PDF: {e}")
             return None
-            
+
 def upload_to_drive(file_path: str, filename: str):
     try:
         # For Render deployment, the service account file should be at this location
